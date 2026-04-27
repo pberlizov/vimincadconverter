@@ -70,3 +70,6 @@ def assert_case_expectations(case: dict[str, Any], result: PipelineResult) -> No
     min_counts: dict[str, int] = case.get("min_feature_kind_counts") or {}
     for kind, minimum in min_counts.items():
         assert result.feature_kinds.count(kind) >= int(minimum), (case["name"], kind, result.feature_kinds)
+    substr = case.get("expect_warning_substr")
+    if substr:
+        assert any(substr in w for w in result.warnings), (case["name"], result.warnings)

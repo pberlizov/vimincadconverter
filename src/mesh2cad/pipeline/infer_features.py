@@ -6,7 +6,13 @@ import math
 import numpy as np
 from scipy.spatial import ConvexHull, Delaunay, cKDTree
 
-from mesh2cad.domain.features import BaseExtrudeFeature, Feature, ThroughHoleFeature
+from mesh2cad.domain.features import (
+    BaseExtrudeFeature,
+    BlindHoleFeature,
+    BossFeature,
+    Feature,
+    ThroughHoleFeature,
+)
 from mesh2cad.domain.primitives import CylinderPrimitive, PlanePrimitive, Primitive
 from mesh2cad.domain.types import Confidence, FeatureKind, ToleranceConfig
 from mesh2cad.mesh.analysis import SceneAnalysis
@@ -52,6 +58,27 @@ def infer_features(
         features.extend(through_holes)
     elif cylinder_primitives:
         warnings.append("No through holes inferred from available cylinders.")
+
+    blind_holes = _infer_blind_holes(
+        cylinder_primitives=cylinder_primitives,
+        base_extrude=base_extrude,
+        through_holes=through_holes,
+        tolerances=tolerances,
+    )
+    if blind_holes:
+        features.extend(blind_holes)
+
+    reserved_centers = [(h.center_xy, h.radius) for h in through_holes] + [
+        (h.center_xy, h.radius) for h in blind_holes
+    ]
+    bosses = _infer_bosses(
+        cylinder_primitives=cylinder_primitives,
+        base_extrude=base_extrude,
+        tolerances=tolerances,
+        reserved_hole_centers=reserved_centers,
+    )
+    if bosses:
+        features.extend(bosses)
 
     return FeatureInferenceResult(features=features, warnings=warnings)
 
@@ -185,6 +212,200 @@ def _infer_through_holes(
         base_extrude=base_extrude,
         tolerances=tolerances,
     )
+
+
+def _infer_blind_holes(
+    cylinder_primitives: list[CylinderPrimitive],
+    base_extrude: BaseExtrudeFeature,
+    through_holes: list[ThroughHoleFeature],
+    tolerances: ToleranceConfig,
+) -> list[BlindHoleFeature]:
+    """Shorter aligned cylinders inside the stock footprint: counterbores / blind holes."""
+    extrusion_axis = np.asarray(base_extrude.sketch_plane["z_dir"], dtype=np.float64)
+    basis_x = np.asarray(base_extrude.sketch_plane["x_dir"], dtype=np.float64)
+    basis_y = np.asarray(base_extrude.sketch_plane["y_dir"], dtype=np.float64)
+    origin = np.asarray(base_extrude.sketch_plane["origin"], dtype=np.float64)
+    profile_loop = base_extrude.profile_loops[0]
+    depth = float(base_extrude.depth)
+
+    blinds: list[BlindHoleFeature] = []
+    for cylinder in cylinder_primitives:
+        alignment = abs(float(np.dot(cylinder.axis_direction, extrusion_axis)))
+        if alignment < math.cos(math.radians(tolerances.angular_deg * 2.0)):
+            continue
+        h = cylinder.height_estimate
+        if h is None:
+            continue
+        if h >= 0.75 * depth:
+            continue
+        if h < 0.18 * depth or h > 0.62 * depth:
+            continue
+
+        offset = np.asarray(cylinder.axis_origin, dtype=np.float64) - origin
+        t_ax = float(np.dot(offset, extrusion_axis))
+        if t_ax + h * 0.52 > depth + tolerances.linear * 2.0:
+            continue
+        if t_ax - h * 0.52 < -tolerances.linear * 2.0:
+            continue
+
+        center_xy = (float(np.dot(offset, basis_x)), float(np.dot(offset, basis_y)))
+
+        if not _hole_fits_profile(
+            center_xy=center_xy,
+            radius=cylinder.radius,
+            profile_loop=profile_loop,
+            tolerances=tolerances,
+        ):
+            continue
+
+        if _matches_any_hole_center(
+            center_xy,
+            cylinder.radius,
+            through_holes,
+            tolerances,
+        ):
+            continue
+
+        hole_depth = float(
+            min(
+                max(h * 1.08 + tolerances.linear * 2.0, tolerances.linear * 5.0),
+                depth * 0.94,
+            )
+        )
+        if hole_depth < float(cylinder.radius) * 1.05:
+            continue
+
+        confidence = Confidence(
+            score=min(1.0, (cylinder.confidence.score * 0.72) + 0.12),
+            reasons=[
+                "aligned cylinder shorter than stock thickness",
+                f"blind hole depth {hole_depth:.4f}",
+                f"radius {cylinder.radius:.4f}",
+            ],
+        )
+        blinds.append(
+            BlindHoleFeature(
+                kind=FeatureKind.BLIND_HOLE,
+                confidence=confidence,
+                parameters={
+                    "center_xy": center_xy,
+                    "radius": cylinder.radius,
+                    "hole_depth": hole_depth,
+                },
+                references={},
+                center_xy=center_xy,
+                radius=float(cylinder.radius),
+                hole_depth=hole_depth,
+            )
+        )
+
+    return _deduplicate_blind_holes(blinds, tolerances)
+
+
+def _matches_any_hole_center(
+    center_xy: tuple[float, float],
+    radius: float,
+    through_holes: list[ThroughHoleFeature],
+    tolerances: ToleranceConfig,
+) -> bool:
+    for hole in through_holes:
+        center_delta = math.dist(center_xy, hole.center_xy)
+        if center_delta <= max(tolerances.linear * 4.0, radius * 0.35, hole.radius * 0.35):
+            return True
+    return False
+
+
+def _deduplicate_blind_holes(
+    holes: list[BlindHoleFeature],
+    tolerances: ToleranceConfig,
+) -> list[BlindHoleFeature]:
+    deduplicated: list[BlindHoleFeature] = []
+    for hole in sorted(holes, key=lambda item: (item.center_xy[0], item.center_xy[1], item.radius)):
+        duplicate = False
+        for existing in deduplicated:
+            center_delta = math.dist(hole.center_xy, existing.center_xy)
+            radius_delta = abs(hole.radius - existing.radius)
+            if (
+                center_delta <= max(tolerances.linear * 2.0, hole.radius * 0.2)
+                and radius_delta <= max(tolerances.linear * 2.0, hole.radius * 0.1)
+            ):
+                duplicate = True
+                break
+        if not duplicate:
+            deduplicated.append(hole)
+    return deduplicated
+
+
+def _infer_bosses(
+    cylinder_primitives: list[CylinderPrimitive],
+    base_extrude: BaseExtrudeFeature,
+    tolerances: ToleranceConfig,
+    *,
+    reserved_hole_centers: list[tuple[tuple[float, float], float]] | None = None,
+) -> list[BossFeature]:
+    extrusion_axis = np.asarray(base_extrude.sketch_plane["z_dir"], dtype=np.float64)
+    basis_x = np.asarray(base_extrude.sketch_plane["x_dir"], dtype=np.float64)
+    basis_y = np.asarray(base_extrude.sketch_plane["y_dir"], dtype=np.float64)
+    origin = np.asarray(base_extrude.sketch_plane["origin"], dtype=np.float64)
+    max_height = max(base_extrude.depth * 0.75, tolerances.linear * 3.0)
+
+    bosses: list[BossFeature] = []
+    for cylinder in cylinder_primitives:
+        alignment = abs(float(np.dot(cylinder.axis_direction, extrusion_axis)))
+        if alignment < math.cos(math.radians(tolerances.angular_deg * 2.0)):
+            continue
+        if cylinder.height_estimate is None:
+            continue
+        if cylinder.height_estimate >= max_height:
+            continue
+
+        offset = np.asarray(cylinder.axis_origin, dtype=np.float64) - origin
+        center_xy = (float(np.dot(offset, basis_x)), float(np.dot(offset, basis_y)))
+        if reserved_hole_centers:
+            skip_reserved = False
+            for reserved_xy, reserved_r in reserved_hole_centers:
+                if math.dist(center_xy, reserved_xy) <= max(
+                    tolerances.linear * 3.0,
+                    cylinder.radius * 0.35,
+                    reserved_r * 0.35,
+                ):
+                    skip_reserved = True
+                    break
+            if skip_reserved:
+                continue
+
+        axial_offset = float(np.dot(offset, extrusion_axis))
+        if axial_offset < (-tolerances.linear * 2.0) or axial_offset > (base_extrude.depth + tolerances.linear * 2.0):
+            continue
+        start_offset = 0.0 if axial_offset <= (base_extrude.depth * 0.5) else base_extrude.depth
+
+        confidence = Confidence(
+            score=min(1.0, (cylinder.confidence.score * 0.75) + 0.15),
+            reasons=[
+                "cylinder axis aligned to extrusion axis",
+                f"boss radius {cylinder.radius:.4f}",
+                f"boss height {cylinder.height_estimate:.4f}",
+            ],
+        )
+        bosses.append(
+            BossFeature(
+                kind=FeatureKind.BOSS,
+                confidence=confidence,
+                parameters={
+                    "center_xy": center_xy,
+                    "radius": cylinder.radius,
+                    "height": cylinder.height_estimate,
+                    "start_offset": start_offset,
+                },
+                references={},
+                center_xy=center_xy,
+                radius=cylinder.radius,
+                height=float(cylinder.height_estimate),
+                start_offset=float(start_offset),
+            )
+        )
+
+    return _deduplicate_bosses(bosses, tolerances)
 
 
 def _canonical_axis(normal: np.ndarray, separation_vector: np.ndarray) -> np.ndarray:
@@ -560,4 +781,30 @@ def _deduplicate_holes(
                 break
         if not duplicate:
             deduplicated.append(hole)
+    return deduplicated
+
+
+def _deduplicate_bosses(
+    bosses: list[BossFeature],
+    tolerances: ToleranceConfig,
+) -> list[BossFeature]:
+    deduplicated: list[BossFeature] = []
+    for boss in sorted(
+        bosses,
+        key=lambda item: (item.center_xy[0], item.center_xy[1], item.radius, item.start_offset),
+    ):
+        duplicate = False
+        for existing in deduplicated:
+            center_delta = math.dist(boss.center_xy, existing.center_xy)
+            radius_delta = abs(boss.radius - existing.radius)
+            height_delta = abs(boss.height - existing.height)
+            if (
+                center_delta <= max(tolerances.linear * 2.0, boss.radius * 0.2)
+                and radius_delta <= max(tolerances.linear * 2.0, boss.radius * 0.1)
+                and height_delta <= max(tolerances.linear * 2.0, boss.height * 0.2)
+            ):
+                duplicate = True
+                break
+        if not duplicate:
+            deduplicated.append(boss)
     return deduplicated

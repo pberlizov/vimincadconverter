@@ -11,9 +11,16 @@ import trimesh
 import numpy as np
 
 from mesh2cad.api.service import process_mesh
-from mesh2cad.cad.build123d_builder import build_step_from_script
+from mesh2cad.cad.build123d_builder import BuildResult, build_step_from_script
 from mesh2cad.cad.script_generator import generate_script
-from mesh2cad.domain.features import BaseExtrudeFeature, RevolveSolidFeature, ThroughHoleFeature
+from mesh2cad.domain.features import (
+    BaseExtrudeFeature,
+    BlindHoleFeature,
+    BossFeature,
+    PocketFeature,
+    RevolveSolidFeature,
+    ThroughHoleFeature,
+)
 from mesh2cad.domain.primitives import CylinderPrimitive, PlanePrimitive, PrimitiveRegion
 from mesh2cad.domain.types import Confidence, FeatureKind, PrimitiveKind, ToleranceConfig
 from mesh2cad.mesh.analysis import analyze_scene
@@ -41,6 +48,50 @@ def _polygon_area(loop: list[tuple[float, float]]) -> float:
         next_point = loop[(index + 1) % len(loop)]
         area += (point[0] * next_point[1]) - (next_point[0] * point[1])
     return abs(area) / 2.0
+
+
+def _create_l_bracket_mesh(depth: float = 2.0) -> trimesh.Trimesh:
+    profile = np.asarray(
+        [
+            (-6.0, -4.0),
+            (0.0, -4.0),
+            (0.0, -1.0),
+            (5.0, -1.0),
+            (5.0, 4.0),
+            (-6.0, 4.0),
+        ],
+        dtype=np.float64,
+    )
+    half_depth = depth / 2.0
+    bottom = np.column_stack((profile, np.full(len(profile), -half_depth)))
+    top = np.column_stack((profile, np.full(len(profile), half_depth)))
+    vertices = np.vstack((bottom, top))
+
+    triangles_2d = [
+        (0, 1, 2),
+        (0, 2, 5),
+        (5, 2, 4),
+        (2, 3, 4),
+    ]
+    faces: list[tuple[int, int, int]] = []
+    top_offset = len(profile)
+
+    for a_idx, b_idx, c_idx in triangles_2d:
+        faces.append((a_idx, c_idx, b_idx))
+        faces.append((top_offset + a_idx, top_offset + b_idx, top_offset + c_idx))
+
+    for index in range(len(profile)):
+        next_index = (index + 1) % len(profile)
+        bottom_a = index
+        bottom_b = next_index
+        top_a = top_offset + index
+        top_b = top_offset + next_index
+        faces.append((bottom_a, bottom_b, top_b))
+        faces.append((bottom_a, top_b, top_a))
+
+    mesh = trimesh.Trimesh(vertices=vertices, faces=np.asarray(faces, dtype=np.int64), process=True)
+    assert mesh.is_watertight
+    return mesh
 
 
 def _build_two_hole_plate_script(scale: float = 1.0) -> str:
@@ -166,6 +217,27 @@ def test_fit_primitives_detects_cylinder(tmp_path):
     cylinder = cylinder_primitives[0]
     assert cylinder.radius == pytest.approx(2.0, abs=0.25)
     assert cylinder.height_estimate == pytest.approx(10.0, abs=0.75)
+
+
+def test_fit_primitives_detects_cone(tmp_path):
+    mesh = trimesh.creation.cone(radius=2.0, height=6.0, sections=64)
+    source = tmp_path / "cone.stl"
+    mesh.export(source)
+
+    loaded = load_mesh(source)
+    repaired = repair_mesh(loaded)
+    sampled = sample_surface(repaired, count=5000)
+    result = fit_primitives(sampled, ToleranceConfig(linear=0.18, min_region_area=3.0))
+
+    cone_primitives = [
+        primitive for primitive in result.primitives if primitive.kind == PrimitiveKind.CONE
+    ]
+
+    assert len(cone_primitives) >= 1
+    cone = cone_primitives[0]
+    assert cone.base_radius == pytest.approx(2.0, abs=0.3)
+    assert cone.height_estimate == pytest.approx(6.0, abs=0.8)
+    assert cone.semi_angle_deg == pytest.approx(np.degrees(np.arctan(2.0 / 6.0)), abs=4.0)
 
 
 def test_fit_primitives_detects_multiple_cylinders_from_sampled_cloud():
@@ -456,6 +528,80 @@ def test_infer_features_detects_multiple_through_holes_and_deduplicates():
     assert center_distance == pytest.approx(4.0, abs=0.15)
 
 
+def test_infer_features_detects_cylindrical_boss():
+    top_points = np.array(
+        [[x, y, 1.0] for x in (-5.0, 5.0) for y in (-3.0, 3.0)],
+        dtype=np.float64,
+    )
+    bottom_points = np.array(
+        [[x, y, -1.0] for x in (-5.0, 5.0) for y in (-3.0, 3.0)],
+        dtype=np.float64,
+    )
+    boss_points = []
+    boss_normals = []
+    for z_coord in np.linspace(1.0, 1.8, 6):
+        for angle in np.linspace(0.0, 2.0 * np.pi, 24, endpoint=False):
+            x_coord = 1.5 + (0.75 * np.cos(angle))
+            y_coord = -0.5 + (0.75 * np.sin(angle))
+            boss_points.append([x_coord, y_coord, z_coord])
+            boss_normals.append([np.cos(angle), np.sin(angle), 0.0])
+
+    points = np.vstack((top_points, bottom_points, np.asarray(boss_points, dtype=np.float64)))
+    normals = np.vstack(
+        (
+            np.tile(np.array([[0.0, 0.0, 1.0]]), (len(top_points), 1)),
+            np.tile(np.array([[0.0, 0.0, -1.0]]), (len(bottom_points), 1)),
+            np.asarray(boss_normals, dtype=np.float64),
+        )
+    )
+    cloud = SampledCloud(points=points, normals=normals, source_face_indices=None)
+    scene = analyze_scene(cloud)
+
+    top_indices = list(range(0, len(top_points)))
+    bottom_indices = list(range(len(top_points), len(top_points) + len(bottom_points)))
+    boss_indices = list(range(len(top_points) + len(bottom_points), len(points)))
+
+    top_plane = PlanePrimitive(
+        kind=PrimitiveKind.PLANE,
+        confidence=Confidence(score=0.95, reasons=[]),
+        region=PrimitiveRegion(point_indices=top_indices, area=60.0),
+        origin=np.array([0.0, 0.0, 1.0], dtype=np.float64),
+        normal=np.array([0.0, 0.0, 1.0], dtype=np.float64),
+    )
+    bottom_plane = PlanePrimitive(
+        kind=PrimitiveKind.PLANE,
+        confidence=Confidence(score=0.95, reasons=[]),
+        region=PrimitiveRegion(point_indices=bottom_indices, area=60.0),
+        origin=np.array([0.0, 0.0, -1.0], dtype=np.float64),
+        normal=np.array([0.0, 0.0, -1.0], dtype=np.float64),
+    )
+    boss_cylinder = CylinderPrimitive(
+        kind=PrimitiveKind.CYLINDER,
+        confidence=Confidence(score=0.9, reasons=[]),
+        region=PrimitiveRegion(point_indices=boss_indices, area=float(2.0 * np.pi * 0.75 * 0.8)),
+        axis_origin=np.array([1.5, -0.5, 1.0], dtype=np.float64),
+        axis_direction=np.array([0.0, 0.0, 1.0], dtype=np.float64),
+        radius=0.75,
+        height_estimate=0.8,
+    )
+
+    result = infer_features(
+        primitives=[top_plane, bottom_plane, boss_cylinder],
+        scene=scene,
+        cloud=cloud,
+        tolerances=ToleranceConfig(linear=0.1, angular_deg=2.0, min_region_area=1.0),
+    )
+
+    boss_features = [feature for feature in result.features if isinstance(feature, BossFeature)]
+    hole_features = [feature for feature in result.features if isinstance(feature, ThroughHoleFeature)]
+
+    assert len(boss_features) == 1
+    assert len(hole_features) == 0
+    assert boss_features[0].radius == pytest.approx(0.75, abs=0.01)
+    assert boss_features[0].height == pytest.approx(0.8, abs=0.01)
+    assert boss_features[0].start_offset == pytest.approx(0.0, abs=0.01)
+
+
 def test_infer_features_preserves_concave_base_profile():
     xy_points: list[tuple[float, float]] = []
     for x_coord in np.linspace(-6.0, 6.0, 25):
@@ -605,6 +751,40 @@ def test_generate_build123d_script_supports_multiple_holes():
     assert script.count("Circle(radius, mode=Mode.SUBTRACT)") == 1
 
 
+def test_generate_build123d_script_supports_bosses():
+    base_feature = BaseExtrudeFeature(
+        kind=FeatureKind.BASE_EXTRUDE,
+        confidence=Confidence(score=0.95, reasons=[]),
+        parameters={"depth": 2.0},
+        references={},
+        profile_loops=[[(-5.0, -3.0), (5.0, -3.0), (5.0, 3.0), (-5.0, 3.0)]],
+        depth=2.0,
+        sketch_plane={
+            "origin": (0.0, 0.0, -1.0),
+            "x_dir": (1.0, 0.0, 0.0),
+            "y_dir": (0.0, 1.0, 0.0),
+            "z_dir": (0.0, 0.0, 1.0),
+        },
+    )
+    boss_feature = BossFeature(
+        kind=FeatureKind.BOSS,
+        confidence=Confidence(score=0.88, reasons=[]),
+        parameters={"center_xy": (1.5, -0.5), "radius": 0.75, "height": 0.8, "start_offset": 2.0},
+        references={},
+        center_xy=(1.5, -0.5),
+        radius=0.75,
+        height=0.8,
+        start_offset=2.0,
+    )
+
+    script = generate_script([base_feature, boss_feature])
+
+    assert "BOSSES = [" in script
+    assert "(1.500000, -0.500000, 0.750000, 0.800000, 2.000000)" in script
+    assert "for x_pos, y_pos, radius, height, start_offset in BOSSES:" in script
+    assert "boss_plane = Plane(origin=ORIGIN + (Z_DIR * start_offset), x_dir=X_DIR, z_dir=Z_DIR)" in script
+
+
 def test_synthesize_build123d_script_wraps_generated_code():
     base_feature = BaseExtrudeFeature(
         kind=FeatureKind.BASE_EXTRUDE,
@@ -739,6 +919,34 @@ def test_run_pipeline_returns_structured_result_without_build(tmp_path):
     assert result.debug["effective_sample_count"] == 1500
     assert result.reconstruction_plan.route == "prismatic_extrude"
     assert "SKETCH_PLANE = Plane(origin=ORIGIN, x_dir=X_DIR, z_dir=Z_DIR)" in result.build.script
+
+
+def test_run_pipeline_recovers_l_bracket_fixture_without_build(tmp_path):
+    mesh = _create_l_bracket_mesh(depth=2.0)
+    source = tmp_path / "l_bracket.stl"
+    mesh.export(source)
+
+    np.random.seed(19)
+    result = run_pipeline(
+        source,
+        output_dir=None,
+        sample_count=3500,
+        auto_tune_sampling=False,
+        tolerances=ToleranceConfig(linear=0.18, angular_deg=4.0, min_region_area=2.0),
+    )
+
+    assert result.reconstruction_plan.route == "prismatic_extrude"
+    assert "base_extrude" in result.feature_kinds
+    base_feature = next(
+        feature
+        for feature in result.debug["feature_parameters"]
+        if feature["kind"] == "base_extrude"
+    )
+    profile_loop = base_feature["profile_loops"][0]
+    assert len(profile_loop) >= 6
+    assert _polygon_area(profile_loop) < 90.0
+    assert result.build is not None
+    assert "Polygon(*PROFILE)" in result.build.script
 
 
 def test_generate_extrude_uses_pose_sketch_plane_when_present():
@@ -879,6 +1087,75 @@ def test_run_pipeline_artifact_matrix_recovers_expected_features(
         assert result.feature_kinds.count("through_hole") < 2
         if result.primitive_kinds.count("cylinder") >= 1:
             assert any("through holes inferred" in w for w in result.warnings)
+
+
+def test_validate_reconstruction_reports_invalid_solid_warning_from_metadata(tmp_path):
+    mesh = trimesh.creation.box(extents=(10.0, 6.0, 2.0))
+    source = tmp_path / "source_box.stl"
+    mesh.export(source)
+    loaded = load_mesh(source)
+
+    invalid_build = BuildResult(
+        success=True,
+        step_path=None,
+        errors=[],
+        metadata={
+            "solid_valid": False,
+            "solid_manifold": False,
+            "volume": float(mesh.volume),
+            "bbox_extents": [10.0, 6.0, 2.0],
+        },
+    )
+
+    report = validate_reconstruction(loaded, invalid_build)
+
+    assert report is not None
+    assert report.solid_valid is False
+    assert "invalid solid reported by CAD kernel." in report.warnings
+    assert "solid is non-manifold according to CAD kernel." in report.warnings
+
+
+@pytest.mark.skipif(
+    importlib.util.find_spec("build123d") is None,
+    reason="build123d is not installed in this interpreter",
+)
+def test_generate_script_blind_hole_and_pocket_build(tmp_path):
+    """Top-face blind hole + polygon pocket subtract after base extrude."""
+    base = BaseExtrudeFeature(
+        kind=FeatureKind.BASE_EXTRUDE,
+        confidence=Confidence(score=0.95, reasons=[]),
+        parameters={"depth": 4.0},
+        references={},
+        profile_loops=[[(-5.0, -3.0), (5.0, -3.0), (5.0, 3.0), (-5.0, 3.0)]],
+        depth=4.0,
+        sketch_plane={
+            "origin": np.array([0.0, 0.0, 0.0]),
+            "x_dir": np.array([1.0, 0.0, 0.0]),
+            "y_dir": np.array([0.0, 1.0, 0.0]),
+            "z_dir": np.array([0.0, 0.0, 1.0]),
+        },
+    )
+    blind = BlindHoleFeature(
+        kind=FeatureKind.BLIND_HOLE,
+        confidence=Confidence(score=0.8, reasons=[]),
+        parameters={},
+        references={},
+        center_xy=(1.0, 0.5),
+        radius=0.45,
+        hole_depth=1.25,
+    )
+    pocket = PocketFeature(
+        kind=FeatureKind.POCKET,
+        confidence=Confidence(score=0.75, reasons=[]),
+        parameters={},
+        references={},
+        profile_loop=[(-2.0, -1.0), (2.0, -1.0), (2.0, 1.0), (-2.0, 1.0)],
+        pocket_depth=0.65,
+    )
+    script = generate_script([base, blind, pocket])
+    assert "BLIND_HOLES" in script and "POCKETS" in script
+    build_result = build_step_from_script(script, tmp_path / "blind_pocket_build")
+    assert build_result.success is True
 
 
 def test_generate_build123d_script_supports_non_rectangular_polygon():

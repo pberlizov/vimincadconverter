@@ -1,6 +1,14 @@
 from __future__ import annotations
 
-from mesh2cad.domain.features import BaseExtrudeFeature, Feature, RevolveSolidFeature, ThroughHoleFeature
+from mesh2cad.domain.features import (
+    BaseExtrudeFeature,
+    BlindHoleFeature,
+    BossFeature,
+    Feature,
+    PocketFeature,
+    RevolveSolidFeature,
+    ThroughHoleFeature,
+)
 from mesh2cad.cad.vector_utils import (
     format_tuple3,
     revolve_sketch_frame,
@@ -25,6 +33,9 @@ def generate_script(features: list[Feature]) -> str:
     through_holes = [
         feature for feature in features if isinstance(feature, ThroughHoleFeature)
     ]
+    blind_holes = [feature for feature in features if isinstance(feature, BlindHoleFeature)]
+    pockets = [feature for feature in features if isinstance(feature, PocketFeature)]
+    bosses = [feature for feature in features if isinstance(feature, BossFeature)]
 
     profile_loop = _normalize_profile_loop(base_feature.profile_loops[0])
     lines: list[str] = [
@@ -47,6 +58,36 @@ def generate_script(features: list[Feature]) -> str:
         lines.append("]")
     else:
         lines.append("HOLES = []")
+
+    if blind_holes:
+        lines.append("BLIND_HOLES = [")
+        for hole in blind_holes:
+            lines.append(
+                f"    ({hole.center_xy[0]:.6f}, {hole.center_xy[1]:.6f}, {hole.radius:.6f}, {hole.hole_depth:.6f}),"
+            )
+        lines.append("]")
+    else:
+        lines.append("BLIND_HOLES = []")
+
+    if pockets:
+        lines.append("POCKETS = [")
+        for pocket in pockets:
+            loop = _normalize_profile_loop(pocket.profile_loop)
+            inner = ", ".join(f"({x:.6f}, {y:.6f})" for x, y in loop)
+            lines.append(f"    ([{inner}], {pocket.pocket_depth:.6f}),")
+        lines.append("]")
+    else:
+        lines.append("POCKETS = []")
+
+    if bosses:
+        lines.append("BOSSES = [")
+        for boss in bosses:
+            lines.append(
+                f"    ({boss.center_xy[0]:.6f}, {boss.center_xy[1]:.6f}, {boss.radius:.6f}, {boss.height:.6f}, {boss.start_offset:.6f}),"
+            )
+        lines.append("]")
+    else:
+        lines.append("BOSSES = []")
 
     sketch_block = _extrude_sketch_block(base_feature)
     lines.extend(sketch_block)
@@ -72,6 +113,23 @@ def _extrude_sketch_block(base_feature: BaseExtrudeFeature) -> list[str]:
             "            with Locations((x_pos, y_pos)):",
             "                Circle(radius, mode=Mode.SUBTRACT)",
             "    extrude(amount=DEPTH)",
+            "    for x_pos, y_pos, radius, height, start_offset in BOSSES:",
+            "        boss_plane = Plane(origin=ORIGIN + (Z_DIR * start_offset), x_dir=X_DIR, z_dir=Z_DIR)",
+            "        with BuildSketch(boss_plane):",
+            "            with Locations((x_pos, y_pos)):",
+            "                Circle(radius)",
+            "        extrude(amount=height)",
+            "    for x_pos, y_pos, radius, h_depth in BLIND_HOLES:",
+            "        top_plane = Plane(origin=ORIGIN + (Z_DIR * DEPTH), x_dir=X_DIR, z_dir=-Z_DIR)",
+            "        with BuildSketch(top_plane):",
+            "            with Locations((x_pos, y_pos)):",
+            "                Circle(radius)",
+            "        extrude(amount=h_depth, mode=Mode.SUBTRACT)",
+            "    for pocket_profile, pocket_depth in POCKETS:",
+            "        top_plane = Plane(origin=ORIGIN + (Z_DIR * DEPTH), x_dir=X_DIR, z_dir=-Z_DIR)",
+            "        with BuildSketch(top_plane):",
+            "            Polygon(*pocket_profile)",
+            "        extrude(amount=pocket_depth, mode=Mode.SUBTRACT)",
             "",
             "result = part.part",
         ]
@@ -85,6 +143,20 @@ def _extrude_sketch_block(base_feature: BaseExtrudeFeature) -> list[str]:
         "            with Locations((x_pos, y_pos)):",
         "                Circle(radius, mode=Mode.SUBTRACT)",
         "    extrude(amount=DEPTH)",
+        "    for x_pos, y_pos, radius, height, start_offset in BOSSES:",
+        "        with BuildSketch():",
+        "            with Locations((x_pos, y_pos)):",
+        "                Circle(radius)",
+        "        extrude(amount=height)",
+        "    for x_pos, y_pos, radius, h_depth in BLIND_HOLES:",
+        "        with BuildSketch():",
+        "            with Locations((x_pos, y_pos)):",
+        "                Circle(radius)",
+        "        extrude(amount=h_depth, mode=Mode.SUBTRACT)",
+        "    for pocket_profile, pocket_depth in POCKETS:",
+        "        with BuildSketch():",
+        "            Polygon(*pocket_profile)",
+        "        extrude(amount=pocket_depth, mode=Mode.SUBTRACT)",
         "",
         "result = part.part",
     ]

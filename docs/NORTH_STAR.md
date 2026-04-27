@@ -23,3 +23,4 @@ Use `validation_report` (volume / bbox / optional surface RMS when a preview STL
 - **Redis/RQ** (optional `queue` extra): wire job submission to a durable worker while preserving `payload.failure` semantics and cancel markers.
 - Richer **benchmark catalog** (curved stock, noisy samples, intentional routing failures) and optional Open3D-accelerated proximity where available.
 - **Gradio** polish (upload to temp dir, download script bundle) beyond the minimal `mesh2cad-ui` path entry.
+- **Pocket inference** from planes or inner loops (today `PocketFeature` is emitted by the script generator when present; heuristics can grow next).

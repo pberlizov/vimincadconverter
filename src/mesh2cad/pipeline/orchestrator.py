@@ -186,6 +186,16 @@ def run_pipeline(
     if build_result is not None:
         warnings.extend(build_result.warnings)
 
+    validation_report = validate_reconstruction(
+        working_mesh,
+        build_result.build_result if build_result else None,
+        align_surface_metrics=align_surface_metrics,
+        icp_iterations=icp_iterations,
+        icp_seed=icp_seed,
+    )
+    if validation_report is not None and validation_report.warnings:
+        warnings.extend(validation_report.warnings)
+
     primitive_kinds = [primitive.kind.value for primitive in primitive_result.primitives]
     reconstruction_plan = build_reconstruction_plan(
         part_class=scene.part_class,
@@ -203,13 +213,7 @@ def run_pipeline(
             primitive_result=primitive_result,
             feature_result=feature_result,
         ),
-        validation_report=validate_reconstruction(
-            working_mesh,
-            build_result.build_result if build_result else None,
-            align_surface_metrics=align_surface_metrics,
-            icp_iterations=icp_iterations,
-            icp_seed=icp_seed,
-        ),
+        validation_report=validation_report,
         build=build_result,
         warnings=warnings,
         feature_kinds=[feature.kind.value for feature in feature_result.features],
