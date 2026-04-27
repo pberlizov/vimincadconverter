@@ -54,12 +54,19 @@ def validate_reconstruction(
         )
         if align_surface_metrics and raw_surface_metrics is not None:
             icp_samples = min(1200, max(200, sample_count))
+            aux = source_mesh.auxiliary_surface_points
+            icp_cloud = (
+                np.asarray(aux, dtype=np.float64)
+                if aux is not None and len(aux) >= 6
+                else None
+            )
             aligned = icp_align_preview_to_source(
                 preview_mesh,
                 source_mesh.mesh,
                 samples=icp_samples,
                 iterations=icp_iterations,
                 seed=icp_seed,
+                icp_target_points=icp_cloud,
             )
             surface_metrics = _surface_distance_metrics_pair(
                 source_mesh,
@@ -67,6 +74,10 @@ def validate_reconstruction(
                 sample_count=sample_count,
             )
             if surface_metrics is not None and raw_surface_metrics is not None:
+                if icp_cloud is not None:
+                    warnings.append(
+                        "ICP alignment used raw scan points (nearest-neighbor to auxiliary cloud)."
+                    )
                 warnings.append(
                     f"surface rms (ICP-aligned preview) {surface_metrics.rms_error:.6f}"
                 )

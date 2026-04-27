@@ -19,7 +19,7 @@ Use `validation_report` (volume / bbox / optional surface RMS when a preview STL
 
 ## Backlog (near-term)
 
-- Tighter **ICP / preview** alignment when the source proxy is a convex hull from dense points (today ICP still targets the hull mesh).
+- **ICP / preview** when auxiliary scan points exist: validation ICP now uses nearest-neighbor correspondences to the raw cloud (see `icp_align_preview_to_source(..., icp_target_points=...)`). Further work: point-to-plane, outlier rejection, and joint refinement with hull-based metrics.
 - **Redis/RQ** (optional `queue` extra): wire job submission to a durable worker while preserving `payload.failure` semantics and cancel markers.
 - Richer **benchmark catalog** (curved stock, noisy samples, intentional routing failures) and optional Open3D-accelerated proximity where available.
 - **Gradio** polish (upload to temp dir, download script bundle) beyond the minimal `mesh2cad-ui` path entry.

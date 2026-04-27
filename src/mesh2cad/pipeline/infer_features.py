@@ -50,8 +50,8 @@ def infer_features(
     )
     if through_holes:
         features.extend(through_holes)
-    else:
-        warnings.append("No through holes inferred.")
+    elif cylinder_primitives:
+        warnings.append("No through holes inferred from available cylinders.")
 
     return FeatureInferenceResult(features=features, warnings=warnings)
 

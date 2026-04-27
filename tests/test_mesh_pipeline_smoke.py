@@ -813,7 +813,7 @@ def test_run_pipeline_handles_scan_like_noisy_multi_hole_mesh(tmp_path):
     assert "base_extrude" in result.feature_kinds
     assert result.feature_kinds.count("through_hole") >= 2
     assert result.primitive_kinds.count("cylinder") >= 2
-    assert "No through holes inferred." not in result.warnings
+    assert not any("through holes inferred" in w for w in result.warnings)
 
 
 @pytest.mark.skipif(
@@ -876,7 +876,9 @@ def test_run_pipeline_artifact_matrix_recovers_expected_features(
     if min_holes >= 2:
         assert result.primitive_kinds.count("cylinder") >= 2
     else:
-        assert "No through holes inferred." in result.warnings
+        assert result.feature_kinds.count("through_hole") < 2
+        if result.primitive_kinds.count("cylinder") >= 1:
+            assert any("through holes inferred" in w for w in result.warnings)
 
 
 def test_generate_build123d_script_supports_non_rectangular_polygon():
