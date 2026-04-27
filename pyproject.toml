@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [
-  { name = "ViminCADConverter contributors" }
+  { name = "Vimin Labs, Inc." }
 ]
 dependencies = [
   "numpy>=1.26",
