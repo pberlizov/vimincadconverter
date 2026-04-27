@@ -11,10 +11,13 @@ def test_sketch_plane_vectors_are_orthogonal():
         "x_dir": (0.0, 1.0, 0.0),
         "z_dir": (1.0, 0.0, 0.0),
     }
-    o, x_dir, z_dir = sketch_plane_vectors(sp)
+    o, x_dir, y_dir, z_dir = sketch_plane_vectors(sp)
     assert np.allclose(o, [1.0, 2.0, 3.0])
     assert abs(float(np.dot(x_dir, z_dir))) < 1e-6
+    assert abs(float(np.dot(x_dir, y_dir))) < 1e-6
+    assert abs(float(np.dot(y_dir, z_dir))) < 1e-6
     assert abs(float(np.linalg.norm(x_dir)) - 1.0) < 1e-6
+    assert abs(float(np.linalg.norm(y_dir)) - 1.0) < 1e-6
     assert abs(float(np.linalg.norm(z_dir)) - 1.0) < 1e-6
 
 

@@ -16,12 +16,17 @@ def icp_align_preview_to_source(
     iterations: int = 10,
     seed: int = 0,
     icp_target_points: np.ndarray | None = None,
+    hybrid_hull_weight: float = 0.0,
 ) -> trimesh.Trimesh:
     """Rigidly align ``preview`` toward ``source`` using trimmed correspondences.
 
     Later iterations use a **point-to-plane** linearized step when normals are available;
     earlier iterations and fallbacks use **point-to-point** (SVD / Kabsch). Correspondence
-    outliers are trimmed by distance percentile each iteration.
+    outliers are trimmed with **percentile + MAD** gates.
+
+    When ``icp_target_points`` is set and ``hybrid_hull_weight`` in ``(0, 1]``, targets ``Q``
+    and normals blend the scan NN with the **hull mesh** closest points so ICP is anchored
+    to both dense samples and the watertight proxy.
     """
     rng = np.random.default_rng(int(seed) & 0xFFFF_FFFF)
     if len(preview.faces) == 0:
@@ -48,6 +53,14 @@ def icp_align_preview_to_source(
 
     n_iter = max(1, int(iterations))
     pt_plane_start = max(0, int(0.45 * n_iter))
+    w_hull = float(np.clip(hybrid_hull_weight, 0.0, 1.0))
+    use_hybrid = (
+        w_hull > 1e-6
+        and target_tree is not None
+        and target_cloud is not None
+        and target_normals is not None
+        and len(source.faces) > 0
+    )
 
     for iteration in range(n_iter):
         P, _fid_p = trimesh.sample.sample_surface(moving, sample_cap)
@@ -56,8 +69,22 @@ def icp_align_preview_to_source(
         if target_tree is not None and target_cloud is not None and target_normals is not None:
             _, nn = target_tree.query(P)
             nn = np.asarray(nn, dtype=np.intp)
-            Q = target_cloud[nn]
-            n_q = target_normals[nn]
+            Q_c = target_cloud[nn]
+            n_c = target_normals[nn]
+            if use_hybrid:
+                try:
+                    closest_h, _dh, tri_h = trimesh.proximity.closest_point_naive(source, P)
+                    Q_h = np.asarray(closest_h, dtype=np.float64)
+                    tri_h = np.asarray(tri_h, dtype=np.intp)
+                    n_h = np.asarray(source.face_normals[tri_h], dtype=np.float64)
+                except Exception:
+                    Q, n_q = Q_c, n_c
+                else:
+                    w = w_hull
+                    Q = (1.0 - w) * Q_c + w * Q_h
+                    n_q = _normalize_rows((1.0 - w) * n_c + w * n_h)
+            else:
+                Q, n_q = Q_c, n_c
         else:
             try:
                 closest, _dist, tri_ids = trimesh.proximity.closest_point_naive(source, P)
@@ -70,13 +97,16 @@ def icp_align_preview_to_source(
         if len(P) < 6:
             break
 
-        P, Q, n_q = _trim_correspondences(P, Q, n_q, percentile=88.0)
+        pct = 82.0 if iteration < max(1, n_iter // 3) else 90.0
+        P, Q, n_q = _trim_correspondences(P, Q, n_q, percentile=pct, mad_sigma=3.5)
         if len(P) < 6:
             break
 
         use_pt_plane = iteration >= pt_plane_start
         if use_pt_plane:
-            omega, t = _point_to_plane_delta(P, Q, n_q, damping=0.85)
+            damp = 0.62 + 0.28 * float(iteration + 1) / float(n_iter)
+            damp = float(np.clip(damp, 0.62, 0.95))
+            omega, t = _point_to_plane_delta(P, Q, n_q, damping=damp)
             if omega is None or not np.all(np.isfinite(omega)) or not np.all(np.isfinite(t)):
                 R, t_k = _kabsch(P, Q)
                 delta = _delta_from_Rt(R, t_k)
@@ -91,17 +121,33 @@ def icp_align_preview_to_source(
     return moving
 
 
+def _normalize_rows(v: np.ndarray) -> np.ndarray:
+    n = np.linalg.norm(v, axis=1, keepdims=True)
+    n = np.maximum(n, 1e-12)
+    return v / n
+
+
 def _trim_correspondences(
     P: np.ndarray,
     Q: np.ndarray,
     n_q: np.ndarray,
     *,
     percentile: float,
+    mad_sigma: float = 3.5,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     d = np.linalg.norm(P - Q, axis=1)
-    thr = float(np.percentile(d, percentile))
-    mask = d <= thr
-    if int(np.sum(mask)) < 6:
+    thr_p = float(np.percentile(d, percentile))
+    mask = d <= thr_p
+    if mad_sigma > 0.0:
+        med = float(np.median(d))
+        mad = float(np.median(np.abs(d - med))) + 1e-9
+        thr_m = med + float(mad_sigma) * 1.4826 * mad
+        mask = mask & (d <= thr_m)
+    n_keep = int(np.sum(mask))
+    if n_keep < 6:
+        mask_p = d <= thr_p
+        if int(np.sum(mask_p)) >= 6:
+            return P[mask_p], Q[mask_p], n_q[mask_p]
         return P, Q, n_q
     return P[mask], Q[mask], n_q[mask]
 
@@ -148,7 +194,7 @@ def _point_to_plane_delta(
     try:
         xi = np.linalg.solve(M, b)
     except np.linalg.LinAlgError:
-        xi, *_ = np.linalg.lstsq(M, b, rcond=1e-9)
+        xi, *_ = np.linalg.lstsq(M, b, rcond=1e-10)
     if not np.all(np.isfinite(xi)):
         return None, None
     omega = xi[:3] * float(damping)

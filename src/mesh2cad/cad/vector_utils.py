@@ -26,14 +26,17 @@ def format_tuple3(v: Any) -> str:
     return f"({float(a[0]):.6f}, {float(a[1]):.6f}, {float(a[2]):.6f})"
 
 
-def sketch_plane_vectors(sketch_plane: dict[str, Any]) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Return (origin, x_dir unit, z_dir unit) for build123d Plane(origin, x_dir=, z_dir=). z_dir is sketch normal / extrusion direction."""
+def sketch_plane_vectors(sketch_plane: dict[str, Any]) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Return (origin, x_dir unit, y_dir unit, z_dir unit) for build123d Plane(origin, x_dir=, z_dir=)."""
     origin = as_float3(sketch_plane.get("origin", (0.0, 0.0, 0.0)))
     x_dir = unit3(sketch_plane.get("x_dir", (1.0, 0.0, 0.0)))
+    y_dir = unit3(sketch_plane.get("y_dir", (0.0, 1.0, 0.0)))
     z_dir = unit3(sketch_plane.get("z_dir", (0.0, 0.0, 1.0)))
     if abs(float(np.dot(x_dir, z_dir))) > 0.99:
         x_dir = unit3(perpendicular_to(z_dir))
-    return origin, x_dir, z_dir
+    if abs(float(np.dot(y_dir, z_dir))) > 0.99 or abs(float(np.dot(y_dir, x_dir))) > 0.99:
+        y_dir = unit3(np.cross(z_dir, x_dir))
+    return origin, x_dir, y_dir, z_dir
 
 
 def perpendicular_to(axis: np.ndarray) -> np.ndarray:

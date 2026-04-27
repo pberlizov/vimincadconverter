@@ -36,3 +36,19 @@ class CylinderPrimitive(Primitive):
     axis_direction: Vec3
     radius: float
     height_estimate: float | None = None
+
+
+@dataclass(slots=True)
+class ConePrimitive(Primitive):
+    apex: Vec3
+    axis_direction: Vec3
+    base_radius: float
+    top_radius: float
+    semi_angle_deg: float
+    height_estimate: float | None = None
+
+
+@dataclass(slots=True)
+class SpherePrimitive(Primitive):
+    center: Vec3
+    radius: float

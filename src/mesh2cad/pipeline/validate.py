@@ -30,6 +30,7 @@ def validate_reconstruction(
     align_surface_metrics: bool = True,
     icp_iterations: int = 10,
     icp_seed: int = 0,
+    icp_hybrid_hull_weight: float | None = None,
 ) -> ValidationReport | None:
     """Compute validation metrics from source mesh and built CAD metadata."""
     if build_result is None:
@@ -42,6 +43,8 @@ def validate_reconstruction(
     metrics = _collect_metrics(source_mesh, build_result.metadata)
     volume_delta_ratio = _relative_delta(metrics.source_volume, metrics.built_volume)
     extents_delta = _extents_delta_ratio(metrics.source_extents, metrics.built_extents)
+    solid_valid = bool(build_result.metadata.get("solid_valid", build_result.success))
+    solid_manifold = build_result.metadata.get("solid_manifold")
 
     preview_mesh = _load_preview_mesh(build_result.metadata.get("preview_stl_path"))
     surface_metrics = None
@@ -60,6 +63,11 @@ def validate_reconstruction(
                 if aux is not None and len(aux) >= 6
                 else None
             )
+            hybrid_w = (
+                float(icp_hybrid_hull_weight)
+                if icp_hybrid_hull_weight is not None
+                else (0.28 if icp_cloud is not None else 0.0)
+            )
             aligned = icp_align_preview_to_source(
                 preview_mesh,
                 source_mesh.mesh,
@@ -67,6 +75,7 @@ def validate_reconstruction(
                 iterations=icp_iterations,
                 seed=icp_seed,
                 icp_target_points=icp_cloud,
+                hybrid_hull_weight=hybrid_w,
             )
             surface_metrics = _surface_distance_metrics_pair(
                 source_mesh,
@@ -76,7 +85,7 @@ def validate_reconstruction(
             if surface_metrics is not None and raw_surface_metrics is not None:
                 if icp_cloud is not None:
                     warnings.append(
-                        "ICP alignment used raw scan points (nearest-neighbor to auxiliary cloud)."
+                        "ICP alignment blended auxiliary scan NN targets with hull mesh correspondences."
                     )
                 warnings.append(
                     f"surface rms (ICP-aligned preview) {surface_metrics.rms_error:.6f}"
@@ -93,9 +102,13 @@ def validate_reconstruction(
         warnings.append(f"bbox extents delta ratio {extents_delta:.6f}")
     if volume_delta_ratio is not None:
         warnings.append(f"volume delta ratio {volume_delta_ratio:.6f}")
+    if not solid_valid:
+        warnings.append("invalid solid reported by CAD kernel.")
+    if solid_manifold is False:
+        warnings.append("solid is non-manifold according to CAD kernel.")
 
     return ValidationReport(
-        solid_valid=build_result.success,
+        solid_valid=solid_valid,
         rms_error=surface_metrics.rms_error if surface_metrics is not None else extents_delta,
         max_error=surface_metrics.max_error if surface_metrics is not None else extents_delta,
         volume_delta_ratio=volume_delta_ratio,

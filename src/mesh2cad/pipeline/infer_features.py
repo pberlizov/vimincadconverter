@@ -10,8 +10,11 @@ from mesh2cad.domain.features import (
     BaseExtrudeFeature,
     BlindHoleFeature,
     BossFeature,
+    CounterSinkHoleFeature,
     Feature,
     PocketFeature,
+    SphericalBossFeature,
+    SphericalCavityFeature,
     ThroughHoleFeature,
 )
 
@@ -19,7 +22,7 @@ from mesh2cad.domain.features import (
 _THROUGH_CYLINDER_MIN_DEPTH_RATIO = 0.78
 _BLIND_CYLINDER_MAX_DEPTH_RATIO = 0.58
 _BLIND_CYLINDER_MIN_DEPTH_RATIO = 0.20
-from mesh2cad.domain.primitives import CylinderPrimitive, PlanePrimitive, Primitive
+from mesh2cad.domain.primitives import ConePrimitive, CylinderPrimitive, PlanePrimitive, Primitive, SpherePrimitive
 from mesh2cad.domain.types import Confidence, FeatureKind, ToleranceConfig
 from mesh2cad.mesh.analysis import SceneAnalysis
 from mesh2cad.mesh.sampling import SampledCloud
@@ -44,6 +47,8 @@ def infer_features(
     cylinder_primitives = [
         primitive for primitive in primitives if isinstance(primitive, CylinderPrimitive)
     ]
+    cone_primitives = [primitive for primitive in primitives if isinstance(primitive, ConePrimitive)]
+    sphere_primitives = [primitive for primitive in primitives if isinstance(primitive, SpherePrimitive)]
 
     features: list[Feature] = []
     warnings: list[str] = []
@@ -60,21 +65,47 @@ def infer_features(
         base_extrude=base_extrude,
         tolerances=tolerances,
     )
-    if through_holes:
-        features.extend(through_holes)
-    elif cylinder_primitives:
+    countersink_holes = _infer_countersink_holes(
+        cone_primitives=cone_primitives,
+        through_holes=through_holes,
+        base_extrude=base_extrude,
+        cloud=cloud,
+        tolerances=tolerances,
+    )
+    matched_countersinks = {
+        (feature.center_xy, feature.hole_radius)
+        for feature in countersink_holes
+    }
+    remaining_through_holes = [
+        hole
+        for hole in through_holes
+        if not any(
+            math.dist(hole.center_xy, center_xy)
+            <= max(tolerances.linear * 3.0, hole.radius * 0.25, hole_radius * 0.25)
+            and abs(hole.radius - hole_radius)
+            <= max(tolerances.linear * 2.0, hole.radius * 0.12, hole_radius * 0.12)
+            for center_xy, hole_radius in matched_countersinks
+        )
+    ]
+
+    if remaining_through_holes:
+        features.extend(remaining_through_holes)
+    elif cylinder_primitives and not countersink_holes:
         warnings.append("No through holes inferred from available cylinders.")
+
+    if countersink_holes:
+        features.extend(countersink_holes)
 
     blind_holes = _infer_blind_holes(
         cylinder_primitives=cylinder_primitives,
         base_extrude=base_extrude,
-        through_holes=through_holes,
+        through_holes=remaining_through_holes,
         tolerances=tolerances,
     )
     if blind_holes:
         features.extend(blind_holes)
 
-    reserved_centers = [(h.center_xy, h.radius) for h in through_holes] + [
+    reserved_centers = [(h.center_xy, h.radius) for h in remaining_through_holes] + [
         (h.center_xy, h.radius) for h in blind_holes
     ]
     bosses = _infer_bosses(
@@ -86,6 +117,16 @@ def infer_features(
     if bosses:
         features.extend(bosses)
 
+    spherical_bosses, spherical_cavities = _infer_spherical_modifiers(
+        sphere_primitives=sphere_primitives,
+        base_extrude=base_extrude,
+        tolerances=tolerances,
+    )
+    if spherical_bosses:
+        features.extend(spherical_bosses)
+    if spherical_cavities:
+        features.extend(spherical_cavities)
+
     pockets = _infer_planar_pockets(
         plane_primitives=plane_primitives,
         base_extrude=base_extrude,
@@ -96,6 +137,193 @@ def infer_features(
         features.extend(pockets)
 
     return FeatureInferenceResult(features=features, warnings=warnings)
+
+
+def _infer_spherical_modifiers(
+    *,
+    sphere_primitives: list[SpherePrimitive],
+    base_extrude: BaseExtrudeFeature,
+    tolerances: ToleranceConfig,
+) -> tuple[list[SphericalBossFeature], list[SphericalCavityFeature]]:
+    if not sphere_primitives:
+        return [], []
+
+    basis_x = np.asarray(base_extrude.sketch_plane["x_dir"], dtype=np.float64)
+    basis_y = np.asarray(base_extrude.sketch_plane["y_dir"], dtype=np.float64)
+    extrusion_axis = np.asarray(base_extrude.sketch_plane["z_dir"], dtype=np.float64)
+    origin = np.asarray(base_extrude.sketch_plane["origin"], dtype=np.float64)
+    depth = float(base_extrude.depth)
+    profile_loop = base_extrude.profile_loops[0]
+    face_tol = max(tolerances.linear * 3.0, depth * 0.08)
+
+    bosses: list[SphericalBossFeature] = []
+    cavities: list[SphericalCavityFeature] = []
+    for sphere in sphere_primitives:
+        center = np.asarray(sphere.center, dtype=np.float64)
+        offset = center - origin
+        center_xy = (float(np.dot(offset, basis_x)), float(np.dot(offset, basis_y)))
+        center_offset = float(np.dot(offset, extrusion_axis))
+        radius = float(sphere.radius)
+        if radius <= tolerances.linear * 2.0:
+            continue
+
+        if not _point_in_polygon(center_xy, profile_loop):
+            continue
+        if _point_to_polygon_edges_distance(center_xy, profile_loop) < max(
+            tolerances.linear * 2.0,
+            radius * 0.35,
+        ):
+            continue
+
+        confidence = Confidence(
+            score=min(1.0, (sphere.confidence.score * 0.78) + 0.14),
+            reasons=[
+                f"sphere radius {radius:.4f}",
+                f"center offset {center_offset:.4f}",
+                "sphere intersects a stock face",
+            ],
+        )
+
+        if center_offset < 0.0 and abs(center_offset) < radius + face_tol:
+            bosses.append(
+                SphericalBossFeature(
+                    kind=FeatureKind.SPHERICAL_BOSS,
+                    confidence=confidence,
+                    parameters={"center_xy": center_xy, "center_offset": center_offset, "radius": radius},
+                    references={},
+                    center_xy=center_xy,
+                    center_offset=center_offset,
+                    radius=radius,
+                )
+            )
+            continue
+        if center_offset > depth and abs(center_offset - depth) < radius + face_tol:
+            bosses.append(
+                SphericalBossFeature(
+                    kind=FeatureKind.SPHERICAL_BOSS,
+                    confidence=confidence,
+                    parameters={"center_xy": center_xy, "center_offset": center_offset, "radius": radius},
+                    references={},
+                    center_xy=center_xy,
+                    center_offset=center_offset,
+                    radius=radius,
+                )
+            )
+            continue
+        if 0.0 < center_offset < radius + face_tol:
+            cavities.append(
+                SphericalCavityFeature(
+                    kind=FeatureKind.SPHERICAL_CAVITY,
+                    confidence=confidence,
+                    parameters={"center_xy": center_xy, "center_offset": center_offset, "radius": radius},
+                    references={},
+                    center_xy=center_xy,
+                    center_offset=center_offset,
+                    radius=radius,
+                )
+            )
+            continue
+        if depth - radius - face_tol < center_offset < depth:
+            cavities.append(
+                SphericalCavityFeature(
+                    kind=FeatureKind.SPHERICAL_CAVITY,
+                    confidence=confidence,
+                    parameters={"center_xy": center_xy, "center_offset": center_offset, "radius": radius},
+                    references={},
+                    center_xy=center_xy,
+                    center_offset=center_offset,
+                    radius=radius,
+                )
+            )
+
+    return _deduplicate_spherical_bosses(bosses, tolerances), _deduplicate_spherical_cavities(cavities, tolerances)
+
+
+def _infer_countersink_holes(
+    *,
+    cone_primitives: list[ConePrimitive],
+    through_holes: list[ThroughHoleFeature],
+    base_extrude: BaseExtrudeFeature,
+    cloud: SampledCloud,
+    tolerances: ToleranceConfig,
+) -> list[CounterSinkHoleFeature]:
+    if not cone_primitives or not through_holes:
+        return []
+
+    extrusion_axis = np.asarray(base_extrude.sketch_plane["z_dir"], dtype=np.float64)
+    basis_x = np.asarray(base_extrude.sketch_plane["x_dir"], dtype=np.float64)
+    basis_y = np.asarray(base_extrude.sketch_plane["y_dir"], dtype=np.float64)
+    origin = np.asarray(base_extrude.sketch_plane["origin"], dtype=np.float64)
+    depth = float(base_extrude.depth)
+
+    countersinks: list[CounterSinkHoleFeature] = []
+    for cone in cone_primitives:
+        alignment = abs(float(np.dot(cone.axis_direction, extrusion_axis)))
+        if alignment < math.cos(math.radians(tolerances.angular_deg * 2.5)):
+            continue
+        if cone.height_estimate is None or cone.height_estimate <= tolerances.linear * 2.0:
+            continue
+
+        support_points = np.asarray(cloud.points[cone.region.point_indices], dtype=np.float64)
+        if len(support_points) < 8:
+            continue
+        local_x = (support_points - origin) @ basis_x
+        local_y = (support_points - origin) @ basis_y
+        local_z = (support_points - origin) @ extrusion_axis
+        center_xy = (float(np.mean(local_x)), float(np.mean(local_y)))
+        z_min = float(np.min(local_z))
+        z_max = float(np.max(local_z))
+        face_tol = max(tolerances.linear * 3.0, depth * 0.08)
+        if abs(z_min) <= face_tol and z_max < depth - face_tol:
+            start_from_top = False
+        elif abs(z_max - depth) <= face_tol and z_min > face_tol:
+            start_from_top = True
+        else:
+            continue
+
+        match: ThroughHoleFeature | None = None
+        for hole in through_holes:
+            center_delta = math.dist(center_xy, hole.center_xy)
+            if center_delta <= max(tolerances.linear * 3.0, hole.radius * 0.3):
+                match = hole
+                break
+        if match is None:
+            continue
+
+        counter_sink_radius = float(max(cone.base_radius, cone.top_radius))
+        if counter_sink_radius <= match.radius + max(tolerances.linear * 1.5, match.radius * 0.08):
+            continue
+
+        confidence = Confidence(
+            score=min(1.0, (cone.confidence.score * 0.78) + 0.15),
+            reasons=[
+                "aligned cone matched to through-hole axis",
+                f"hole radius {match.radius:.4f}",
+                f"countersink radius {counter_sink_radius:.4f}",
+                f"cone angle {cone.semi_angle_deg * 2.0:.4f}",
+            ],
+        )
+        countersinks.append(
+            CounterSinkHoleFeature(
+                kind=FeatureKind.COUNTERSINK_HOLE,
+                confidence=confidence,
+                parameters={
+                    "center_xy": center_xy,
+                    "hole_radius": match.radius,
+                    "counter_sink_radius": counter_sink_radius,
+                    "counter_sink_angle_deg": cone.semi_angle_deg * 2.0,
+                    "start_from_top": start_from_top,
+                },
+                references={},
+                center_xy=center_xy,
+                hole_radius=float(match.radius),
+                counter_sink_radius=counter_sink_radius,
+                counter_sink_angle_deg=float(cone.semi_angle_deg * 2.0),
+                start_from_top=start_from_top,
+            )
+        )
+
+    return _deduplicate_countersinks(countersinks, tolerances)
 
 
 def _infer_base_extrude(
@@ -180,27 +408,69 @@ def _infer_through_holes(
 
     holes: list[ThroughHoleFeature] = []
     for cylinder in cylinder_primitives:
-        alignment = abs(float(np.dot(cylinder.axis_direction, extrusion_axis)))
-        if alignment < math.cos(math.radians(tolerances.angular_deg * 2.0)):
-            continue
-
         if cylinder.height_estimate is None:
             continue
 
-        if cylinder.height_estimate < base_extrude.depth * _THROUGH_CYLINDER_MIN_DEPTH_RATIO:
+        axis_origin = np.asarray(cylinder.axis_origin, dtype=np.float64)
+        axis_direction = np.asarray(cylinder.axis_direction, dtype=np.float64)
+        axis_direction = axis_direction / max(np.linalg.norm(axis_direction), 1e-12)
+        axis_z_origin = float(np.dot(axis_origin - origin, extrusion_axis))
+        denom = float(np.dot(axis_direction, extrusion_axis))
+        if abs(denom) < 0.1:
             continue
 
-        offset = np.asarray(cylinder.axis_origin, dtype=np.float64) - origin
-        center_x = float(np.dot(offset, basis_x))
-        center_y = float(np.dot(offset, basis_y))
-        center_xy = (center_x, center_y)
+        t0 = -axis_z_origin / denom
+        t1 = (float(base_extrude.depth) - axis_z_origin) / denom
+        entry_t, exit_t = sorted((t0, t1))
+        hole_length = float(abs(exit_t - entry_t))
+        if hole_length < max(base_extrude.depth * 0.45, tolerances.linear * 4.0):
+            continue
+        if cylinder.height_estimate is None or cylinder.height_estimate < hole_length * _THROUGH_CYLINDER_MIN_DEPTH_RATIO:
+            continue
+
+        entry_pt = axis_origin + axis_direction * entry_t
+        exit_pt = axis_origin + axis_direction * exit_t
+
+        entry_z = float(np.dot(entry_pt - origin, extrusion_axis))
+        exit_z = float(np.dot(exit_pt - origin, extrusion_axis))
+        if not (
+            abs(entry_z) <= tolerances.linear * 2.0
+            or abs(entry_z - base_extrude.depth) <= tolerances.linear * 2.0
+        ):
+            continue
+        if not (
+            abs(exit_z) <= tolerances.linear * 2.0
+            or abs(exit_z - base_extrude.depth) <= tolerances.linear * 2.0
+        ):
+            continue
+
+        entry_xy = (
+            float(np.dot(entry_pt - origin, basis_x)),
+            float(np.dot(entry_pt - origin, basis_y)),
+        )
+        exit_xy = (
+            float(np.dot(exit_pt - origin, basis_x)),
+            float(np.dot(exit_pt - origin, basis_y)),
+        )
+        if not _hole_fits_profile(
+            center_xy=entry_xy,
+            radius=cylinder.radius,
+            profile_loop=profile_loop,
+            tolerances=tolerances,
+        ) and not _hole_fits_profile(
+            center_xy=exit_xy,
+            radius=cylinder.radius,
+            profile_loop=profile_loop,
+            tolerances=tolerances,
+        ):
+            continue
 
         confidence = Confidence(
             score=min(1.0, (cylinder.confidence.score * 0.8) + 0.2),
             reasons=[
-                "cylinder axis aligned to extrusion axis",
+                "cylinder axis through stock face pair",
                 f"hole radius {cylinder.radius:.4f}",
-                f"support height {cylinder.height_estimate:.4f}",
+                f"hole length {hole_length:.4f}",
             ],
         )
 
@@ -209,14 +479,18 @@ def _infer_through_holes(
                 kind=FeatureKind.THROUGH_HOLE,
                 confidence=confidence,
                 parameters={
-                    "center_xy": center_xy,
+                    "center_xy": entry_xy,
                     "radius": cylinder.radius,
-                    "depth": base_extrude.depth,
+                    "depth": hole_length,
+                    "axis_origin": tuple(float(x) for x in entry_pt.tolist()),
+                    "axis_direction": tuple(float(x) for x in axis_direction.tolist()),
                 },
                 references={},
-                center_xy=center_xy,
-                radius=cylinder.radius,
-                depth=base_extrude.depth,
+                center_xy=entry_xy,
+                radius=float(cylinder.radius),
+                depth=hole_length,
+                axis_origin=tuple(float(x) for x in entry_pt.tolist()),
+                axis_direction=tuple(float(x) for x in axis_direction.tolist()),
             )
         )
 
@@ -926,4 +1200,75 @@ def _deduplicate_bosses(
                 break
         if not duplicate:
             deduplicated.append(boss)
+    return deduplicated
+
+
+def _deduplicate_countersinks(
+    countersinks: list[CounterSinkHoleFeature],
+    tolerances: ToleranceConfig,
+) -> list[CounterSinkHoleFeature]:
+    deduplicated: list[CounterSinkHoleFeature] = []
+    for countersink in sorted(
+        countersinks,
+        key=lambda item: (
+            item.center_xy[0],
+            item.center_xy[1],
+            item.hole_radius,
+            item.counter_sink_radius,
+        ),
+    ):
+        duplicate = False
+        for existing in deduplicated:
+            center_delta = math.dist(countersink.center_xy, existing.center_xy)
+            hole_delta = abs(countersink.hole_radius - existing.hole_radius)
+            sink_delta = abs(countersink.counter_sink_radius - existing.counter_sink_radius)
+            if (
+                center_delta <= max(tolerances.linear * 2.0, countersink.hole_radius * 0.2)
+                and hole_delta <= max(tolerances.linear * 2.0, countersink.hole_radius * 0.1)
+                and sink_delta <= max(tolerances.linear * 2.0, countersink.counter_sink_radius * 0.1)
+            ):
+                duplicate = True
+                break
+        if not duplicate:
+            deduplicated.append(countersink)
+    return deduplicated
+
+
+def _deduplicate_spherical_bosses(
+    bosses: list[SphericalBossFeature],
+    tolerances: ToleranceConfig,
+) -> list[SphericalBossFeature]:
+    deduplicated: list[SphericalBossFeature] = []
+    for boss in sorted(bosses, key=lambda item: (item.center_xy[0], item.center_xy[1], item.center_offset, item.radius)):
+        duplicate = False
+        for existing in deduplicated:
+            if (
+                math.dist(boss.center_xy, existing.center_xy) <= max(tolerances.linear * 2.0, boss.radius * 0.2)
+                and abs(boss.center_offset - existing.center_offset) <= max(tolerances.linear * 2.0, boss.radius * 0.2)
+                and abs(boss.radius - existing.radius) <= max(tolerances.linear * 2.0, boss.radius * 0.1)
+            ):
+                duplicate = True
+                break
+        if not duplicate:
+            deduplicated.append(boss)
+    return deduplicated
+
+
+def _deduplicate_spherical_cavities(
+    cavities: list[SphericalCavityFeature],
+    tolerances: ToleranceConfig,
+) -> list[SphericalCavityFeature]:
+    deduplicated: list[SphericalCavityFeature] = []
+    for cavity in sorted(cavities, key=lambda item: (item.center_xy[0], item.center_xy[1], item.center_offset, item.radius)):
+        duplicate = False
+        for existing in deduplicated:
+            if (
+                math.dist(cavity.center_xy, existing.center_xy) <= max(tolerances.linear * 2.0, cavity.radius * 0.2)
+                and abs(cavity.center_offset - existing.center_offset) <= max(tolerances.linear * 2.0, cavity.radius * 0.2)
+                and abs(cavity.radius - existing.radius) <= max(tolerances.linear * 2.0, cavity.radius * 0.1)
+            ):
+                duplicate = True
+                break
+        if not duplicate:
+            deduplicated.append(cavity)
     return deduplicated

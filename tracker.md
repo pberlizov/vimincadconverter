@@ -213,12 +213,12 @@ Legend:
 - [x] Multiple cylinder primitive fitting exists.
   Verification:
   - Verified by synthetic multi-cylinder sampled-cloud test.
-- [ ] Cone primitive fitting exists.
+- [x] Cone primitive fitting exists.
   Verification:
-  - Add tests when implemented.
-- [ ] Sphere primitive fitting exists.
+  - Verified by synthetic cone mesh primitive-fitting test in both interpreters.
+- [x] Sphere primitive fitting exists.
   Verification:
-  - Add tests when implemented.
+  - Verified by synthetic sphere mesh primitive-fitting test in both interpreters.
 
 ## Feature Inference Objectives
 
@@ -234,12 +234,12 @@ Legend:
 - [x] Through-hole inference exists.
   Verification:
   - Verified by synthetic plate-with-hole feature test.
-- [ ] Boss inference exists.
+- [x] Boss inference exists.
   Verification:
-  - Build synthetic protrusion tests.
-- [ ] Pocket inference exists.
+  - Verified by synthetic protrusion feature-inference test and boss script-generation test.
+- [x] Pocket inference exists.
   Verification:
-  - Build synthetic cutout tests.
+  - Verified by synthetic planar-pocket feature-inference test and build-enabled pocket script test.
 
 ## CAD Synthesis Objectives
 
@@ -249,15 +249,9 @@ Legend:
 - [x] Script generator exists.
   Verification:
   - Verified by tests that inspect generated code content.
-- [ ] Build123d builder exists.
-  Verification:
-  - Run generated scripts in tests or smoke commands.
 - [x] Build123d builder exists.
   Verification:
   - Verified by tests for missing-dependency handling and synthesis integration.
-- [ ] STEP export exists.
-  Verification:
-  - Confirm output file is created and non-empty.
 - [x] STEP export exists.
   Verification:
   - Verified by Python 3.11 tests that write a non-empty `model.step`.
@@ -291,6 +285,12 @@ Legend:
 - [x] Async job status endpoints exist.
   Verification:
   - Verified by UI/API polling tests.
+- [x] Async job cancellation exists.
+  Verification:
+  - Verified by HTTP cancel endpoint tests and runner cancel-marker behavior.
+- [x] Async job retry exists.
+  Verification:
+  - Verified by HTTP and UI retry-after-completion tests.
 
 ## UI Objectives
 
@@ -318,6 +318,9 @@ Legend:
 - [x] Side-by-side geometry preview exists.
   Verification:
   - Verified by job-detail UI test and preview artifact availability.
+- [x] Retry controls exist.
+  Verification:
+  - Verified by UI retry route test and job detail template wiring.
 
 ## Validation Objectives
 
@@ -333,9 +336,9 @@ Legend:
 - [x] Volume delta measurement exists.
   Verification:
   - Verified by synthetic solid comparison tests.
-- [ ] Invalid solid warnings exist.
+- [x] Invalid solid warnings exist.
   Verification:
-  - Add negative tests.
+  - Verified by direct validation test with invalid/non-manifold CAD metadata.
 
 ## Test Corpus Objectives
 
@@ -351,21 +354,18 @@ Legend:
 - [x] Primitive fitting on a simple box is tested.
   Verification:
   - Run `pytest -q` after the primitive-fitting test lands.
-- [ ] Plate-with-holes synthetic fixture exists.
-  Verification:
-  - Add test file.
 - [x] Plate-with-holes synthetic fixture exists.
   Verification:
   - Inspect `tests/test_mesh_pipeline_smoke.py` and run `pytest -q`.
-- [ ] L-bracket fixture exists.
+- [x] L-bracket fixture exists.
   Verification:
-  - Add test file.
+  - Verified by mesh-backed L-bracket pipeline test.
 - [x] Cylindrical spacer fixture exists.
   Verification:
   - Inspect `tests/test_mesh_pipeline_smoke.py` and run `pytest -q`.
-- [ ] Noisy mesh variants exist.
+- [x] Noisy mesh variants exist.
   Verification:
-  - Add synthetic perturbation tests.
+  - Inspect `tests/test_mesh_pipeline_smoke.py` artifact and scan-like regressions and run `pytest -q`.
 
 ## Documentation Objectives
 
@@ -375,18 +375,18 @@ Legend:
 - [x] Tracker exists.
   Verification:
   - Open `tracker.md`.
-- [ ] Architecture doc exists.
+- [x] Architecture doc exists.
   Verification:
-  - Add `docs/architecture.md`.
-- [ ] MVP definition doc exists.
+  - Open `docs/architecture.md`.
+- [x] MVP definition doc exists.
   Verification:
-  - Add `docs/mvp.md`.
-- [ ] Supported geometry classes doc exists.
+  - Open `docs/mvp.md`.
+- [x] Supported geometry classes doc exists.
   Verification:
-  - Add `docs/supported-parts.md`.
-- [ ] Failure modes doc exists.
+  - Open `docs/supported-parts.md`.
+- [x] Failure modes doc exists.
   Verification:
-  - Add `docs/failure-modes.md`.
+  - Open `docs/failure-modes.md`.
 
 ## Process Objectives
 
@@ -402,9 +402,9 @@ Legend:
 - [ ] Branching workflow exists.
   Verification:
   - Initialize git and inspect branch name.
-- [ ] CI exists.
+- [x] CI exists.
   Verification:
-  - Add GitHub Actions workflow and run it.
+  - Inspect `.github/workflows/ci.yml` and verify it runs `pytest` in matrix jobs.
 
 ## Near-Term Build Queue
 
@@ -429,15 +429,15 @@ Legend:
 - [x] Add first cylinder-detection pass.
   Verification:
   - Run cylinder fixture tests with `pytest -q`.
-- [ ] Add feature inference for base extrudes.
+- [x] Add feature inference for base extrudes.
   Verification:
-  - Add bracket reconstruction test.
-- [ ] Add script synthesis.
+  - Verified by synthetic plane-pair and bracket reconstruction tests.
+- [x] Add script synthesis.
   Verification:
-  - Generated Python file exists and runs.
-- [ ] Add STEP export.
+  - Verified by generated code content tests and synthesis wrapper tests.
+- [x] Add STEP export.
   Verification:
-  - Exported STEP file exists.
+  - Verified by Python 3.11 tests that write a non-empty `model.step`.
 
 ## End-of-Step Physical Audit Template
 
@@ -1233,3 +1233,220 @@ Legend:
   - There is no external queue or supervisor yet.
   - There is no cancellation endpoint yet.
   - There is no retry policy yet.
+
+## Step Audit 2026-04-27 A
+
+- Files added this step:
+  - None.
+- Files modified this step:
+  - `src/mesh2cad/domain/features.py`
+  - `src/mesh2cad/cad/script_generator.py`
+  - `src/mesh2cad/cad/build123d_builder.py`
+  - `src/mesh2cad/pipeline/infer_features.py`
+  - `src/mesh2cad/pipeline/validate.py`
+  - `tests/test_mesh_pipeline_smoke.py`
+  - `tracker.md`
+- Commands run this step:
+  - `sed -n '1,260p' tests/test_mesh_pipeline_smoke.py`
+  - `sed -n '1,260p' tracker.md`
+  - `sed -n '1,220p' src/mesh2cad/cad/script_generator.py`
+  - `sed -n '260,620p' tests/test_mesh_pipeline_smoke.py`
+  - `sed -n '220,520p' tracker.md`
+  - `sed -n '1,220p' src/mesh2cad/pipeline/validate.py`
+  - `sed -n '620,980p' tests/test_mesh_pipeline_smoke.py`
+  - `sed -n '1,220p' src/mesh2cad/cad/build123d_builder.py`
+  - `sed -n '1,220p' src/mesh2cad/domain/features.py`
+  - `sed -n '1,220p' src/mesh2cad/domain/types.py`
+  - `rg -n "def _infer_bosses|def _infer_through_holes|height_estimate|through holes inferred|BossFeature" src/mesh2cad/pipeline/infer_features.py`
+  - `sed -n '132,260p' src/mesh2cad/pipeline/infer_features.py`
+  - `pytest -q tests/test_mesh_pipeline_smoke.py -k 'cylindrical_boss or supports_bosses or l_bracket or invalid_solid_warning'`
+  - `python3 - <<'PY' ... PY`
+  - `sed -n '1,120p' src/mesh2cad/pipeline/orchestrator.py`
+  - `pytest -q tests/test_mesh_pipeline_smoke.py -k 'cylindrical_boss or supports_bosses or l_bracket or invalid_solid_warning'`
+  - `pytest -q`
+  - `python3.11 -m pytest -q`
+- Tests passed this step:
+  - Focused tracker-goal coverage:
+    - `tests/test_mesh_pipeline_smoke.py::test_infer_features_detects_cylindrical_boss`
+    - `tests/test_mesh_pipeline_smoke.py::test_generate_build123d_script_supports_bosses`
+    - `tests/test_mesh_pipeline_smoke.py::test_run_pipeline_recovers_l_bracket_fixture_without_build`
+    - `tests/test_mesh_pipeline_smoke.py::test_validate_reconstruction_reports_invalid_solid_warning_from_metadata`
+  - Full suite:
+    - Python 3.14 interpreter: `42 passed, 11 skipped`
+    - Python 3.11 interpreter: `51 passed, 2 skipped`
+- Behaviors now physically present:
+  - Boss feature inference exists for short cylinders aligned to the base extrusion axis.
+  - The generated `build123d` script format can now express cylindrical bosses in addition to base extrudes and through-holes.
+  - CAD build metadata now carries kernel-level solid validity and manifoldness flags into validation.
+  - Validation now emits explicit warnings when the CAD kernel reports an invalid or non-manifold solid.
+  - The test suite now includes a mesh-backed L-bracket fixture that runs through the actual pipeline and verifies a concave polygonal base profile path.
+  - The repository already had CI, and the tracker now reflects the existing GitHub Actions workflow instead of leaving that goal incorrectly open.
+- Gaps still not physically present:
+  - Pocket inference is still absent.
+  - Sphere primitive fitting is still absent.
+  - The L-bracket fixture does not yet include hole or boss variants.
+  - CI is present, but there is no evidence in the repo itself of remote GitHub run status history.
+  - There is still no cancellation endpoint, retry policy, or external job supervisor.
+
+## Step Audit 2026-04-27 B
+
+- Files added this step:
+  - None.
+- Files modified this step:
+  - `src/mesh2cad/domain/primitives.py`
+  - `src/mesh2cad/pipeline/fit_primitives.py`
+  - `src/mesh2cad/cad/script_generator.py`
+  - `tests/test_mesh_pipeline_smoke.py`
+  - `tracker.md`
+- Commands run this step:
+  - `sed -n '1,360p' src/mesh2cad/pipeline/fit_primitives.py`
+  - `sed -n '1,220p' src/mesh2cad/domain/primitives.py`
+  - `rg -n "Cone|PrimitiveKind.CONE|cone primitive|cone" tests/test_mesh_pipeline_smoke.py tracker.md src/mesh2cad -g '!*.pyc'`
+  - `sed -n '360,760p' src/mesh2cad/pipeline/fit_primitives.py`
+  - `sed -n '1,220p' src/mesh2cad/pipeline/orchestrator.py`
+  - `sed -n '1,220p' src/mesh2cad/domain/reports.py`
+  - `pytest -q tests/test_mesh_pipeline_smoke.py -k 'detects_cone'`
+  - `python3.11 -m pytest -q tests/test_mesh_pipeline_smoke.py -k 'detects_cone'`
+  - `pytest -q`
+  - `python3.11 -m pytest -q`
+  - `rg -n "BLIND_HOLES|POCKETS|blind hole|PocketFeature|BlindHoleFeature|boss_plane = Plane|origin=ORIGIN \\+ \\(Z_DIR \\*\" src/mesh2cad/cad/script_generator.py tests/test_mesh_pipeline_smoke.py`
+  - `sed -n '1,320p' src/mesh2cad/cad/script_generator.py`
+  - `python3.11 - <<'PY' ... PY`
+  - `python3.11 -m pytest -q tests/test_mesh_pipeline_smoke.py -k 'blind_hole_and_pocket_build or detects_cone or supports_bosses'`
+  - `pytest -q tests/test_mesh_pipeline_smoke.py -k 'detects_cone or supports_bosses'`
+- Tests passed this step:
+  - Focused cone coverage:
+    - `tests/test_mesh_pipeline_smoke.py::test_fit_primitives_detects_cone`
+  - Focused generator/build regression coverage:
+    - `tests/test_mesh_pipeline_smoke.py::test_generate_script_blind_hole_and_pocket_build`
+    - `tests/test_mesh_pipeline_smoke.py::test_generate_build123d_script_supports_bosses`
+  - Full suite:
+    - Python 3.14 interpreter: `43 passed, 12 skipped`
+    - Python 3.11 interpreter: `53 passed, 2 skipped`
+- Behaviors now physically present:
+  - The primitive fitter can now emit `ConePrimitive` results from sampled sidewall geometry.
+  - Cone fitting reuses the existing sidewall clustering and axis-estimation path, then validates a linear taper in radius along the inferred axis.
+  - Cone primitives now include apex, axis direction, base radius, top radius, semi-angle, height estimate, support region, and confidence.
+  - The test suite now verifies cone detection on a synthetic cone mesh in both interpreters.
+  - The pose-aware CAD script generator now uses explicit tuple math for translated sketch planes, which fixes build execution for blind-hole and pocket scripts under Python 3.11.
+- Gaps still not physically present:
+  - Cone fitting is not yet consumed by downstream feature inference.
+  - Pocket inference is still absent.
+  - There is still no cancellation endpoint, retry policy, or external job supervisor.
+
+## Step Audit 2026-04-27 C
+
+- Files added this step:
+  - None.
+- Files modified this step:
+  - `src/mesh2cad/domain/primitives.py`
+  - `src/mesh2cad/pipeline/fit_primitives.py`
+  - `tests/test_mesh_pipeline_smoke.py`
+  - `tracker.md`
+- Commands run this step:
+  - `sed -n '1,260p' src/mesh2cad/domain/primitives.py`
+  - `sed -n '1,420p' src/mesh2cad/pipeline/fit_primitives.py`
+  - `rg -n "sphere|PrimitiveKind.SPHERE|Sphere" tests/test_mesh_pipeline_smoke.py tracker.md src/mesh2cad -g '!*.pyc'`
+  - `pytest -q tests/test_mesh_pipeline_smoke.py -k 'detects_sphere'`
+  - `python3.11 -m pytest -q tests/test_mesh_pipeline_smoke.py -k 'detects_sphere'`
+  - `pytest -q`
+  - `python3.11 -m pytest -q`
+- Tests passed this step:
+  - Focused sphere coverage:
+    - `tests/test_mesh_pipeline_smoke.py::test_fit_primitives_detects_sphere`
+  - Full suite:
+    - Python 3.14 interpreter: `44 passed, 13 skipped`
+    - Python 3.11 interpreter: `55 passed, 2 skipped`
+- Behaviors now physically present:
+  - The primitive fitter can now emit `SpherePrimitive` results from sampled mesh geometry.
+  - Sphere fitting uses sampled point normals to solve for a shared center and radius, then validates support residuals, radius consistency, and directional coverage before accepting a primitive.
+  - Sphere primitives now include center, radius, support region, area estimate, and confidence.
+  - The test suite now verifies sphere detection on a synthetic sphere mesh in both interpreters.
+- Gaps still not physically present:
+  - Sphere fitting is not yet consumed by downstream feature inference.
+  - Cone fitting is not yet consumed by downstream feature inference.
+  - There is still no cancellation endpoint, retry policy, or external job supervisor.
+
+## Step Audit 2026-04-27 D
+
+- Files added this step:
+  - None.
+- Files modified this step:
+  - `tests/test_mesh_pipeline_smoke.py`
+  - `tracker.md`
+- Commands run this step:
+  - `sed -n '1,260p' src/mesh2cad/domain/features.py`
+  - `rg -n "PocketFeature|BLIND_HOLE|POCKET|pocket inference|blind hole" src/mesh2cad tests/test_mesh_pipeline_smoke.py tracker.md`
+  - `sed -n '1,340p' src/mesh2cad/pipeline/infer_features.py`
+  - `sed -n '340,620p' src/mesh2cad/pipeline/infer_features.py`
+  - `sed -n '1080,1215p' tests/test_mesh_pipeline_smoke.py`
+  - `sed -n '220,260p' tracker.md`
+  - `python3 - <<'PY' ... PY`
+  - `pytest -q tests/test_mesh_pipeline_smoke.py -k 'detects_planar_pocket or blind_hole_and_pocket_build'`
+  - `python3.11 -m pytest -q tests/test_mesh_pipeline_smoke.py -k 'detects_planar_pocket or blind_hole_and_pocket_build'`
+  - `pytest -q`
+  - `python3.11 -m pytest -q`
+- Tests passed this step:
+  - Focused pocket coverage:
+    - `tests/test_mesh_pipeline_smoke.py::test_infer_features_detects_planar_pocket`
+    - `tests/test_mesh_pipeline_smoke.py::test_generate_script_blind_hole_and_pocket_build`
+  - Full suite:
+    - Python 3.14 interpreter: `46 passed, 13 skipped`
+    - Python 3.11 interpreter: `57 passed, 2 skipped`
+- Behaviors now physically present:
+  - Pocket inference is verified on a synthetic planar cutout case.
+  - The feature inference layer can emit `PocketFeature` objects from paired interior parallel planes within a base extrusion.
+  - The existing CAD script path for pockets remains buildable under the Python 3.11 build-enabled environment.
+- Gaps still not physically present:
+  - Sphere and cone primitives are still not consumed by downstream feature inference.
+  - There is still no cancellation endpoint, retry policy, or external job supervisor.
+
+## Step Audit 2026-04-27 E
+
+- Files added this step:
+  - None.
+- Files modified this step:
+  - `src/mesh2cad/ui/db.py`
+  - `src/mesh2cad/jobs/runner.py`
+  - `src/mesh2cad/api/schemas.py`
+  - `src/mesh2cad/api/app.py`
+  - `src/mesh2cad/ui/routes.py`
+  - `src/mesh2cad/ui/templates/job_detail.html`
+  - `tests/test_mesh_pipeline_smoke.py`
+  - `tracker.md`
+- Commands run this step:
+  - `sed -n '1,280p' src/mesh2cad/jobs/runner.py`
+  - `sed -n '1,260p' src/mesh2cad/jobs/worker.py`
+  - `sed -n '1,320p' src/mesh2cad/ui/db.py`
+  - `sed -n '1,320p' src/mesh2cad/api/app.py`
+  - `sed -n '1,260p' src/mesh2cad/api/schemas.py`
+  - `rg -n "cancel|submit|jobs/|queued|processing|failed|completed|retry" tests/test_mesh_pipeline_smoke.py src/mesh2cad/ui/routes.py src/mesh2cad/api/app.py`
+  - `sed -n '1,360p' src/mesh2cad/ui/routes.py`
+  - `sed -n '1,260p' src/mesh2cad/jobs/worker_subprocess.py`
+  - `sed -n '1,220p' src/mesh2cad/jobs/exceptions.py`
+  - `sed -n '1360,1575p' tests/test_mesh_pipeline_smoke.py`
+  - `sed -n '1,220p' src/mesh2cad/api/service.py`
+  - `rg -n "can_cancel|cancel|Retry|retry" src/mesh2cad/ui/templates/job_detail.html src/mesh2cad/ui/templates/dashboard.html`
+  - `sed -n '1,260p' src/mesh2cad/ui/templates/job_detail.html`
+  - `pytest -q tests/test_mesh_pipeline_smoke.py -k 'retry_after_completion or cancel_when_still_queued'`
+  - `python3.11 -m pytest -q tests/test_mesh_pipeline_smoke.py -k 'retry_after_completion or cancel_when_still_queued'`
+  - `pytest -q`
+  - `python3.11 -m pytest -q`
+- Tests passed this step:
+  - Focused async control coverage:
+    - `tests/test_mesh_pipeline_smoke.py::test_http_process_job_cancel_when_still_queued`
+    - `tests/test_mesh_pipeline_smoke.py::test_http_async_process_retry_after_completion`
+    - `tests/test_mesh_pipeline_smoke.py::test_ui_job_retry_after_completion`
+  - Full suite:
+    - Python 3.14 interpreter: `49 passed, 13 skipped`
+    - Python 3.11 interpreter: `60 passed, 2 skipped`
+- Behaviors now physically present:
+  - Job request parameters are now persisted in the database for durable retry.
+  - Async API jobs can be cancelled through `/process/jobs/{job_id}/cancel`.
+  - Async API jobs can be retried through `/process/jobs/{job_id}/retry`.
+  - Authenticated UI jobs can be retried through `/jobs/{job_id}/retry`.
+  - Retrying a job clears previous artifacts, bumps retry metadata, and resubmits the same persisted request on the same job ID.
+  - Queued/running jobs now transition through explicit cancellation handling instead of only relying on passive worker cleanup.
+- Gaps still not physically present:
+  - There is still no external queue or supervisor.
+  - Cone and sphere primitives are still not consumed by downstream feature inference.

@@ -53,6 +53,11 @@
         <button class="danger-button" type="submit">Cancel job</button>
       </form>
       {% endif %}
+      {% if can_retry %}
+      <form method="post" action="/jobs/{{ job.id }}/retry" class="inline-cancel">
+        <button class="secondary-button" type="submit">Retry job</button>
+      </form>
+      {% endif %}
     </div>
   </div>
 

@@ -42,5 +42,52 @@
     "min_feature_kind_counts": {
       "base_extrude": 1
     }
+  },
+  {
+    "name": "box_point_cloud_prismatic_noisy",
+    "generator": "point_cloud_box",
+    "extents": [10.0, 6.0, 2.0],
+    "point_count": 5000,
+    "point_noise_std": 0.05,
+    "noise_seed": 1,
+    "sample_count": 2200,
+    "expect_route": "prismatic_extrude",
+    "min_feature_kind_counts": {
+      "base_extrude": 1
+    }
+  },
+  {
+    "name": "capsule_curved_stock_prismatic",
+    "generator": "capsule",
+    "height": 7.0,
+    "radius": 1.2,
+    "count_a": 16,
+    "count_b": 16,
+    "sample_count": 3500,
+    "expect_route": "prismatic_extrude",
+    "min_feature_kind_counts": {
+      "base_extrude": 1
+    }
+  },
+  {
+    "name": "box_slender_prismatic_not_revolve",
+    "generator": "box",
+    "extents": [2.0, 2.0, 14.0],
+    "sample_count": 3500,
+    "expect_route": "prismatic_extrude",
+    "min_feature_kind_counts": {
+      "base_extrude": 1
+    }
+  },
+  {
+    "name": "icosphere_mesh_revolve_route",
+    "generator": "icosphere",
+    "radius": 3.0,
+    "subdivisions": 2,
+    "sample_count": 2500,
+    "expect_route": "revolve_simple",
+    "min_feature_kind_counts": {
+      "revolve": 1
+    }
   }
 ]

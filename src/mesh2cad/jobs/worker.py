@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import argparse
 import json
+from dataclasses import asdict
 from pathlib import Path
+from typing import Any
 
 from mesh2cad.api.service import process_mesh
+from mesh2cad.domain.types import ToleranceConfig
 
 
 def run_worker(
@@ -19,58 +22,71 @@ def run_worker(
     align_surface_metrics: bool = True,
     icp_iterations: int = 10,
     icp_seed: int = 0,
-) -> dict:
+    include_script: bool = True,
+    tolerances: dict[str, Any] | None = None,
+    icp_hybrid_hull_weight: float | None = None,
+) -> dict[str, Any]:
+    tc: ToleranceConfig | None = None
+    if isinstance(tolerances, dict) and tolerances:
+        merged = {**asdict(ToleranceConfig()), **tolerances}
+        tc = ToleranceConfig(
+            linear=float(merged["linear"]),
+            angular_deg=float(merged["angular_deg"]),
+            min_region_area=float(merged["min_region_area"]),
+            ransac_distance=float(merged["ransac_distance"]),
+        )
     payload = process_mesh(
         input_path=input_path,
         output_dir=output_dir,
         sample_count=sample_count,
         simplify_target_faces=simplify_target_faces,
         build=build,
+        tolerances=tc,
         auto_tune_sampling=auto_tune_sampling,
         align_surface_metrics=align_surface_metrics,
         icp_iterations=icp_iterations,
         icp_seed=icp_seed,
+        include_script=include_script,
+        icp_hybrid_hull_weight=icp_hybrid_hull_weight,
     )
     _write_job_artifacts(Path(artifact_dir), payload)
     return payload
+
+
+def run_worker_from_request(data: dict[str, Any]) -> dict[str, Any]:
+    """Dispatch ``run_worker`` from a JSON request dict (see ``worker_request.json``)."""
+    simplify = data.get("simplify_target_faces")
+    hybrid = data.get("icp_hybrid_hull_weight")
+    return run_worker(
+        input_path=data["input_path"],
+        output_dir=data.get("output_dir"),
+        artifact_dir=data["artifact_dir"],
+        sample_count=int(data.get("sample_count", 5000)),
+        simplify_target_faces=int(simplify) if simplify is not None else None,
+        build=bool(data.get("build", True)),
+        auto_tune_sampling=bool(data.get("auto_tune_sampling", True)),
+        align_surface_metrics=bool(data.get("align_surface_metrics", True)),
+        icp_iterations=int(data.get("icp_iterations", 10)),
+        icp_seed=int(data.get("icp_seed", 0)),
+        include_script=bool(data.get("include_script", True)),
+        tolerances=data.get("tolerances") if isinstance(data.get("tolerances"), dict) else None,
+        icp_hybrid_hull_weight=float(hybrid) if hybrid is not None else None,
+    )
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Run a ViminCADConverter (mesh2cad) job worker subprocess."
     )
-    parser.add_argument("--input-path", required=True)
-    parser.add_argument("--artifact-dir", required=True)
-    parser.add_argument("--output-dir", default=None)
-    parser.add_argument("--sample-count", type=int, default=5_000)
-    parser.add_argument("--simplify-target-faces", type=int, default=None)
-    parser.add_argument("--build", action="store_true")
     parser.add_argument(
-        "--no-auto-tune",
-        action="store_true",
-        help="Disable mesh-size-based sample count clamping.",
+        "--worker-request-json",
+        type=Path,
+        required=True,
+        help="Path to worker_request.json (written by the job runner).",
     )
-    parser.add_argument(
-        "--no-align-surface-metrics",
-        action="store_true",
-        help="Skip ICP alignment for surface RMS/max distance in validation.",
-    )
-    parser.add_argument("--icp-iterations", type=int, default=10)
-    parser.add_argument("--icp-seed", type=int, default=0)
     args = parser.parse_args()
-
-    payload = run_worker(
-        input_path=args.input_path,
-        output_dir=args.output_dir,
-        artifact_dir=args.artifact_dir,
-        sample_count=args.sample_count,
-        simplify_target_faces=args.simplify_target_faces,
-        build=args.build,
-        auto_tune_sampling=not args.no_auto_tune,
-        align_surface_metrics=not args.no_align_surface_metrics,
-        icp_iterations=args.icp_iterations,
-        icp_seed=args.icp_seed,
-    )
+    data = json.loads(Path(args.worker_request_json).read_text(encoding="utf-8"))
+    payload = run_worker_from_request(data)
     print(json.dumps(payload, default=str))
 
 

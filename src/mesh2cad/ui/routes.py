@@ -9,7 +9,7 @@ from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from mesh2cad.jobs.runner import request_job_cancel, submit_job
+from mesh2cad.jobs.runner import request_job_cancel, retry_job, submit_job
 from mesh2cad.ui.auth import generate_session_token, hash_password, verify_password
 from mesh2cad.ui.db import (
     create_job_with_id,
@@ -22,6 +22,7 @@ from mesh2cad.ui.db import (
     get_user_for_session,
     initialize_database,
     list_jobs_for_user,
+    set_job_request,
     update_job,
     user_count,
 )
@@ -153,6 +154,18 @@ def create_ui_router() -> APIRouter:
         job_id = _persist_upload(user_id=int(user["id"]), source_file=source_file)
         upload_dir, job_dir = get_job_paths(job_id)
         input_path = _first_file(upload_dir)
+        request_payload = {
+            "input_path": str(input_path),
+            "output_dir": str(job_dir) if build == "on" else None,
+            "sample_count": sample_count,
+            "simplify_target_faces": int(simplify_target_faces) if simplify_target_faces.strip() else None,
+            "build": build == "on",
+            "auto_tune_sampling": auto_tune == "on",
+            "align_surface_metrics": True,
+            "icp_iterations": 10,
+            "icp_seed": 0,
+        }
+        set_job_request(job_id, request_payload)
         submit_job(
             job_id=job_id,
             input_path=input_path,
@@ -178,6 +191,21 @@ def create_ui_router() -> APIRouter:
         request_job_cancel(job_id)
         return RedirectResponse(url=f"/jobs/{job_id}", status_code=303)
 
+    @router.post("/jobs/{job_id}/retry")
+    def retry_job_route(
+        job_id: str,
+        user: dict[str, Any] = Depends(require_user),
+    ):
+        job = get_job_for_user(job_id, int(user["id"]))
+        if job is None:
+            raise HTTPException(status_code=404, detail="Job not found.")
+        if job["status"] not in {"completed", "failed", "cancelled"}:
+            raise HTTPException(status_code=400, detail="Only terminal jobs can be retried.")
+        detail = retry_job(job_id)
+        if detail["status"] != "queued":
+            raise HTTPException(status_code=400, detail=f"Retry failed: {detail['detail']}")
+        return RedirectResponse(url=f"/jobs/{job_id}", status_code=303)
+
     @router.get("/jobs/{job_id}", response_class=HTMLResponse)
     def job_detail(request: Request, job_id: str, user: dict[str, Any] = Depends(require_user)):
         job = get_job_for_user(job_id, int(user["id"]))
@@ -201,6 +229,7 @@ def create_ui_router() -> APIRouter:
                 "failure": failure,
                 "reconstruction_plan": plan,
                 "can_cancel": job["status"] in {"queued", "processing"},
+                "can_retry": job["status"] in {"completed", "failed", "cancelled"},
             },
         )
 

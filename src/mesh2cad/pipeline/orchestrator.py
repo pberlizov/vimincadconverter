@@ -54,6 +54,7 @@ def run_pipeline(
     align_surface_metrics: bool = True,
     icp_iterations: int = 10,
     icp_seed: int = 0,
+    icp_hybrid_hull_weight: float | None = None,
 ) -> PipelineResult:
     """Run the supported mesh-to-CAD pipeline from file input to synthesis output."""
     tolerances = tolerances or ToleranceConfig()
@@ -142,9 +143,13 @@ def run_pipeline(
         )
     )
 
-    if scene.part_class == PartClass.ROTATIONAL:
-        revolve_result = infer_simple_revolve_solid(primitive_result.primitives, tolerances)
-        if revolve_result.features:
+    revolve_result = infer_simple_revolve_solid(primitive_result.primitives, tolerances)
+    if revolve_result.features:
+        should_override = (
+            scene.part_class == PartClass.ROTATIONAL
+            or not any(isinstance(f, BaseExtrudeFeature) for f in feature_result.features)
+        )
+        if should_override:
             feature_result = FeatureInferenceResult(
                 features=revolve_result.features,
                 warnings=[*feature_result.warnings, *revolve_result.warnings],
@@ -153,7 +158,7 @@ def run_pipeline(
                 PlanStage(
                     "infer_revolve_override",
                     True,
-                    "Rotational part class: using cylinder → revolve route",
+                    "Using cylinder → revolve route for rotational or no prismatic base extraction",
                 )
             )
         else:
@@ -161,9 +166,17 @@ def run_pipeline(
                 PlanStage(
                     "infer_revolve_override",
                     False,
-                    revolve_result.warnings[0] if revolve_result.warnings else "No revolve solid",
+                    "Revolve available but prismatic base extraction remains preferred",
                 )
             )
+    else:
+        stages.append(
+            PlanStage(
+                "infer_revolve_override",
+                False,
+                revolve_result.warnings[0] if revolve_result.warnings else "No revolve solid",
+            )
+        )
 
     build_result: SynthesisResult | None = None
     if feature_result.features:
@@ -192,6 +205,7 @@ def run_pipeline(
         align_surface_metrics=align_surface_metrics,
         icp_iterations=icp_iterations,
         icp_seed=icp_seed,
+        icp_hybrid_hull_weight=icp_hybrid_hull_weight,
     )
     if validation_report is not None and validation_report.warnings:
         warnings.extend(validation_report.warnings)

@@ -40,12 +40,20 @@ mesh2cad cloud.xyz --no-build --icp-iterations 15   # point cloud input; validat
 
 ```bash
 mesh2cad-api   # http://127.0.0.1:8000
-mesh2cad-ui    # minimal Gradio panel (http://127.0.0.1:7860) if gradio is installed
+mesh2cad-ui    # Gradio panel (http://127.0.0.1:7860): path or file upload, JSON + downloads (report / script / STEP / preview STL); temp work under $TMPDIR or MESH2CAD_STATE_DIR
 ```
 
-- `POST /process` — synchronous JSON body (`ProcessMeshRequest`: `input_path`, `build`, `sample_count`, `simplify_target_faces`, `auto_tune_sampling`, `align_surface_metrics`, `icp_iterations`, `icp_seed`, …).
-- `POST /process/submit` — queue job, poll `GET /process/jobs/{job_id}`.
-- `POST /process/jobs/{job_id}/cancel` — cancel queued work or request termination of a running worker (see env vars below).
+- **`/v1` (recommended for integrations)** — OpenAPI `/docs` lists full schemas. Summary:
+  - `GET /health`, `GET /ready` — unauthenticated probes (`ready` checks SQLite + state dir).
+  - `POST /v1/process` — synchronous run; **JSON** (`ProcessMeshBodyV1`: `input_path`, `build`, `include_script`, `tolerances`, `icp_hybrid_hull_weight`, …) or **`multipart/form-data`** with field `file` (STL/OBJ/PLY/xyz/pts/csv/npy) plus optional form fields mirroring the JSON keys.
+  - `POST /v1/jobs` — async job; same JSON or multipart; optional header **`Idempotency-Key`**; optional JSON field **`webhook_url`** (terminal-state POST; HMAC header **`X-Mesh2cad-Signature`** when `MESH2CAD_WEBHOOK_SECRET` is set).
+  - `GET /v1/jobs/{job_id}` — status + payload.
+  - `GET /v1/jobs/{job_id}/artifacts/{name}` — download `report`, `script`, `step`, `preview`, or `input` (authenticated when API keys are configured).
+  - `GET /v1/jobs/{job_id}/events` — SSE stream of `{ "status": ... }` until terminal.
+  - `POST /v1/jobs/{job_id}/cancel` · `POST /v1/jobs/{job_id}/retry` — same semantics as legacy routes below.
+  - When **`MESH2CAD_API_KEYS`** is set (comma-separated), v1 routes require **`X-API-Key`** or **`Authorization: Bearer <key>`**. If unset, v1 remains open (development only).
+  - **`MESH2CAD_CORS_ORIGINS`** — comma-separated list to enable CORS for browser clients.
+- **Legacy (unchanged)** — `POST /process` (sync JSON, extended with `include_script`, `tolerances`, `icp_hybrid_hull_weight`), `POST /process/submit` (optional `webhook_url`), `GET /process/jobs/{job_id}`, cancel/retry — no API key layer.
 
 Browser UI: setup admin user, sign in, upload mesh, download report/script/STEP, see **structured failure** blocks when jobs fail.
 
@@ -61,8 +69,35 @@ Browser UI: setup admin user, sign in, upload mesh, download report/script/STEP,
 |----------|---------|
 | `MESH2CAD_STATE_DIR` | SQLite DB + uploads + job dirs (tests set a temp dir automatically). |
 | `MESH2CAD_JOB_TIMEOUT_SEC` | Worker subprocess wall clock (default `900`). |
-| `MESH2CAD_MAX_UPLOAD_MB` | UI upload cap. |
+| `MESH2CAD_MAX_UPLOAD_MB` | UI and `/v1` upload cap. |
 | `MESH2CAD_SECURE_COOKIES` | Set `true` behind HTTPS. |
+| `MESH2CAD_API_KEYS` | Comma-separated keys required for `/v1/*` when set. |
+| `MESH2CAD_WEBHOOK_SECRET` | Optional HMAC key for job webhooks (`sha256=` prefix on `X-Mesh2cad-Signature`). |
+| `MESH2CAD_CORS_ORIGINS` | Comma-separated allowed origins for CORS. |
+| `MESH2CAD_LOG_LEVEL` | Python log level (`INFO`, `DEBUG`, …). |
+| `MESH2CAD_LOG_JSON` | Set `true` for JSON lines on stderr (ingestion-friendly). |
+| `MESH2CAD_METRICS_ENABLED` | Set `true` to expose Prometheus text at **`GET /metrics`** (no API key; protect with network policy). |
+| `MESH2CAD_RATE_LIMIT_PER_MINUTE` | Per-client-IP cap on `POST /v1/process`, `POST /v1/jobs`, `POST /process` (default `120`; in-memory, **single replica**). |
+| `MESH2CAD_MAX_REQUEST_MB` | Max `Content-Length` for POST/PUT/PATCH (default `256` MiB). |
+| `MESH2CAD_MAX_REQUEST_BYTES` | Optional exact byte cap (overrides MB when set). |
+| `MESH2CAD_JOB_WORKERS` | Thread-pool size for async jobs (default `2`). |
+| `MESH2CAD_JOB_RETENTION_DAYS` | Default for **`mesh2cad-purge-jobs --days`** (see below). |
+| `MESH2CAD_WEBHOOK_ALLOW_HTTP` | Set `true` to allow `http://` webhook URLs (dev only). |
+
+### Job retention
+
+Terminal jobs (`completed` / `failed` / `cancelled`) older than **N** days (by `updated_at`) can be removed from SQLite and disk:
+
+```bash
+mesh2cad-purge-jobs --days 30
+```
+
+Run on a schedule (e.g. weekly cron) so `MESH2CAD_STATE_DIR` does not grow without bound.
+
+### Single replica vs horizontal scale
+
+- **Today:** SQLite, on-disk job artifacts, in-process rate limits, and the thread-pool job runner are **single-host assumptions**. Run **one API/worker replica** per `MESH2CAD_STATE_DIR`, or use **sticky sessions** and accept that rate limits are per-process.
+- **Horizontal scale:** use a **shared queue + object storage** (the optional **`[queue]`** extra points at Redis/RQ) and move job metadata off SQLite, or partition one writer for the DB.
 
 ## Benchmarks & north star
 

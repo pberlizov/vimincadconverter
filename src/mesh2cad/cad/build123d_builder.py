@@ -110,6 +110,12 @@ def _result_metadata(result_object: Any, *, preview_path: Path | None = None) ->
     volume = getattr(result_object, "volume", None)
     if volume is not None:
         metadata["volume"] = float(volume)
+    is_valid = getattr(result_object, "is_valid", None)
+    if is_valid is not None:
+        metadata["solid_valid"] = bool(is_valid)
+    is_manifold = getattr(result_object, "is_manifold", None)
+    if is_manifold is not None:
+        metadata["solid_manifold"] = bool(is_manifold)
 
     bounding_box = getattr(result_object, "bounding_box", None)
     if callable(bounding_box):

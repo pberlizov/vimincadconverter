@@ -57,3 +57,22 @@ def test_icp_mesh_target_matches_previous_behavior():
     q_src, _ = trimesh.sample.sample_surface(mesh, 400)
     q_al, _ = trimesh.sample.sample_surface(aligned, 400)
     assert _mean_nn_distance(q_al, q_src) < 0.2
+
+
+def test_icp_hybrid_hull_weight_runs_without_error():
+    box = trimesh.creation.box(extents=(1.0, 1.0, 1.0))
+    hull = box.convex_hull
+    pts, _ = trimesh.sample.sample_surface(box, 400)
+    pts = np.asarray(pts, dtype=np.float64) + np.array([0.05, 0.0, 0.0])
+    shifted = box.copy()
+    shifted.apply_translation([0.2, 0.0, 0.0])
+    aligned = icp_align_preview_to_source(
+        shifted,
+        hull,
+        samples=300,
+        iterations=8,
+        seed=3,
+        icp_target_points=pts,
+        hybrid_hull_weight=0.35,
+    )
+    assert len(aligned.faces) > 0

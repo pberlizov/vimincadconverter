@@ -22,6 +22,8 @@ def process_mesh(
     align_surface_metrics: bool = True,
     icp_iterations: int = 10,
     icp_seed: int = 0,
+    include_script: bool = True,
+    icp_hybrid_hull_weight: float | None = None,
 ) -> dict[str, Any]:
     """API-oriented entrypoint that returns a JSON-friendly response payload."""
     result = run_pipeline(
@@ -34,11 +36,16 @@ def process_mesh(
         align_surface_metrics=align_surface_metrics,
         icp_iterations=icp_iterations,
         icp_seed=icp_seed,
+        icp_hybrid_hull_weight=icp_hybrid_hull_weight,
     )
-    return pipeline_result_to_dict(result)
+    return pipeline_result_to_dict(result, include_script=include_script)
 
 
-def pipeline_result_to_dict(result: PipelineResult) -> dict[str, Any]:
+def pipeline_result_to_dict(
+    result: PipelineResult,
+    *,
+    include_script: bool = True,
+) -> dict[str, Any]:
     build_payload = None
     if result.build is not None:
         build_payload = {
@@ -46,7 +53,7 @@ def pipeline_result_to_dict(result: PipelineResult) -> dict[str, Any]:
             "step_path": result.build.step_path,
             "warnings": list(result.build.warnings),
             "metadata": dict(result.build.metadata),
-            "script": result.build.script,
+            "script": result.build.script if include_script else None,
         }
 
     detection_payload = asdict(result.detection_report)

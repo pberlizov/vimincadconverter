@@ -24,7 +24,10 @@ class PrimitiveKind(str, Enum):
 class FeatureKind(str, Enum):
     BASE_EXTRUDE = "base_extrude"
     THROUGH_HOLE = "through_hole"
+    COUNTERSINK_HOLE = "countersink_hole"
     BLIND_HOLE = "blind_hole"
+    SPHERICAL_BOSS = "spherical_boss"
+    SPHERICAL_CAVITY = "spherical_cavity"
     BOSS = "boss"
     POCKET = "pocket"
     REVOLVE = "revolve"

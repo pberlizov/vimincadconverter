@@ -31,6 +31,12 @@ def _make_input_mesh_path(case: dict[str, Any], tmp_dir: Path) -> Path:
         mesh = trimesh.creation.box(extents=extents)
         n = int(case.get("point_count", 5000))
         pts, _ = trimesh.sample.sample_surface(mesh, n)
+        pts = np.asarray(pts, dtype=np.float64)
+        noise = float(case.get("point_noise_std", 0.0))
+        if noise > 0.0:
+            seed = int(case.get("noise_seed", 0)) & 0xFFFF_FFFF
+            rng = np.random.default_rng(seed)
+            pts = pts + rng.normal(0.0, noise, size=pts.shape)
         path = tmp_dir / f"{case['name']}.xyz"
         np.savetxt(path, pts, fmt="%.6f")
         return path
@@ -50,6 +56,20 @@ def _make_mesh(case: dict[str, Any]) -> trimesh.Trimesh:
             radius=float(case["radius"]),
             height=float(case["height"]),
             sections=int(case.get("sections", 64)),
+        )
+    if generator == "capsule":
+        return trimesh.creation.capsule(
+            height=float(case["height"]),
+            radius=float(case["radius"]),
+            count=[
+                int(case.get("count_a", 16)),
+                int(case.get("count_b", 16)),
+            ],
+        )
+    if generator == "icosphere":
+        return trimesh.creation.icosphere(
+            subdivisions=int(case.get("subdivisions", 2)),
+            radius=float(case["radius"]),
         )
     raise ValueError(f"Unknown generator: {generator!r}")
 

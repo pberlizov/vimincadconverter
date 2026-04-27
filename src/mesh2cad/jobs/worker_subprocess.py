@@ -13,79 +13,26 @@ from typing import Any
 from mesh2cad.jobs.exceptions import CANCEL_FILENAME, JobCancelledError, JobTimeoutError
 
 
-def build_worker_command(
-    *,
-    input_path: str,
-    output_dir: str | None,
-    artifact_dir: str,
-    sample_count: int,
-    simplify_target_faces: int | None,
-    build: bool,
-    auto_tune_sampling: bool,
-    align_surface_metrics: bool = True,
-    icp_iterations: int = 10,
-    icp_seed: int = 0,
-) -> list[str]:
-    command = [
-        sys.executable,
-        "-m",
-        "mesh2cad.jobs.worker",
-        "--input-path",
-        input_path,
-        "--artifact-dir",
-        artifact_dir,
-        "--sample-count",
-        str(sample_count),
-    ]
-    if output_dir is not None:
-        command.extend(["--output-dir", output_dir])
-    if simplify_target_faces is not None:
-        command.extend(["--simplify-target-faces", str(simplify_target_faces)])
-    if build:
-        command.append("--build")
-    if not auto_tune_sampling:
-        command.append("--no-auto-tune")
-    if not align_surface_metrics:
-        command.append("--no-align-surface-metrics")
-    command.extend(["--icp-iterations", str(icp_iterations)])
-    command.extend(["--icp-seed", str(icp_seed)])
-    return command
-
-
-def run_cli_worker_subprocess(
-    *,
-    input_path: str,
-    output_dir: str | None,
-    artifact_dir: str,
-    sample_count: int,
-    simplify_target_faces: int | None,
-    build: bool,
-    auto_tune_sampling: bool,
-    align_surface_metrics: bool = True,
-    icp_iterations: int = 10,
-    icp_seed: int = 0,
-) -> dict[str, Any]:
+def run_cli_worker_subprocess(*, worker_request: dict[str, Any]) -> dict[str, Any]:
     """Run ``mesh2cad.jobs.worker`` until completion; enforce timeout and cancel file."""
-    artifact_path = Path(artifact_dir)
+    artifact_path = Path(str(worker_request["artifact_dir"]))
     artifact_path.mkdir(parents=True, exist_ok=True)
     cancel_path = artifact_path.joinpath(CANCEL_FILENAME)
     cancel_path.unlink(missing_ok=True)
 
+    req_path = artifact_path / "worker_request.json"
+    req_path.write_text(json.dumps(worker_request), encoding="utf-8")
+
     timeout_sec = float(os.environ.get("MESH2CAD_JOB_TIMEOUT_SEC", "900"))
     deadline = time.monotonic() + max(5.0, timeout_sec)
 
-    command = build_worker_command(
-        input_path=input_path,
-        output_dir=output_dir,
-        artifact_dir=artifact_dir,
-        sample_count=sample_count,
-        simplify_target_faces=simplify_target_faces,
-        build=build,
-        auto_tune_sampling=auto_tune_sampling,
-        align_surface_metrics=align_surface_metrics,
-        icp_iterations=icp_iterations,
-        icp_seed=icp_seed,
-    )
+    command = [
+        sys.executable,
+        "-m",
+        "mesh2cad.jobs.worker",
+        "--worker-request-json",
+        str(req_path),
+    ]
 
     proc = subprocess.Popen(
         command,

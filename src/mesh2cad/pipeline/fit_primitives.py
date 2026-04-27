@@ -8,10 +8,12 @@ from numpy.typing import NDArray
 from scipy.spatial import cKDTree
 
 from mesh2cad.domain.primitives import (
+    ConePrimitive,
     CylinderPrimitive,
     PlanePrimitive,
     Primitive,
     PrimitiveRegion,
+    SpherePrimitive,
 )
 from mesh2cad.domain.types import Confidence, PrimitiveKind, ToleranceConfig
 from mesh2cad.mesh.sampling import SampledCloud
@@ -30,7 +32,7 @@ def fit_primitives(
     cloud: SampledCloud,
     tolerances: ToleranceConfig,
 ) -> PrimitiveFitResult:
-    """Fit an initial set of plane and cylinder primitives from a sampled cloud."""
+    """Fit an initial set of plane, cylinder, cone, and sphere primitives from a sampled cloud."""
     if cloud.normals is None or len(cloud.normals) == 0:
         return PrimitiveFitResult(
             primitives=[],
@@ -53,9 +55,15 @@ def fit_primitives(
         cylinder_index_map = np.arange(len(cloud.points), dtype=np.int64)
     cylinder_primitives = _fit_cylinders(cylinder_cloud, tolerances=tolerances)
     _remap_cylinder_regions(cylinder_primitives, cylinder_index_map)
+    cone_primitives = _fit_cones(cylinder_cloud, tolerances=tolerances)
+    _remap_cone_regions(cone_primitives, cylinder_index_map)
+    sphere_primitives = _fit_spheres(cylinder_cloud, tolerances=tolerances)
+    _remap_sphere_regions(sphere_primitives, cylinder_index_map)
 
     primitives: list[Primitive] = [*plane_primitives]
     primitives.extend(cylinder_primitives)
+    primitives.extend(cone_primitives)
+    primitives.extend(sphere_primitives)
 
     used_points = {
         point_index
@@ -69,6 +77,10 @@ def fit_primitives(
         warnings.append("No plane primitives detected.")
     if not cylinder_primitives:
         warnings.append("No cylinder primitives detected.")
+    if not cone_primitives:
+        warnings.append("No cone primitives detected.")
+    if not sphere_primitives:
+        warnings.append("No sphere primitives detected.")
 
     return PrimitiveFitResult(
         primitives=primitives,
@@ -353,6 +365,26 @@ def _remap_cylinder_regions(
         ].tolist()
 
 
+def _remap_cone_regions(
+    cones: list[ConePrimitive],
+    index_map: NDArray[np.int64],
+) -> None:
+    for cone in cones:
+        cone.region.point_indices = index_map[
+            np.asarray(cone.region.point_indices, dtype=np.int64)
+        ].tolist()
+
+
+def _remap_sphere_regions(
+    spheres: list[SpherePrimitive],
+    index_map: NDArray[np.int64],
+) -> None:
+    for sphere in spheres:
+        sphere.region.point_indices = index_map[
+            np.asarray(sphere.region.point_indices, dtype=np.int64)
+        ].tolist()
+
+
 def _cylinder_confidence(
     support_count: int,
     total_count: int,
@@ -575,3 +607,318 @@ def _deduplicate_cylinders(
         if not duplicate:
             deduplicated.append(cylinder)
     return deduplicated
+
+
+def _fit_cones(
+    cloud: SampledCloud,
+    tolerances: ToleranceConfig,
+) -> list[ConePrimitive]:
+    if cloud.normals is None or len(cloud.normals) == 0:
+        return []
+
+    points = np.asarray(cloud.points, dtype=np.float64)
+    normals = np.asarray(cloud.normals, dtype=np.float64)
+    if len(points) < max(100, int(len(cloud.points) * 0.08)):
+        return []
+
+    normalized_normals = _normalize_vectors(normals)
+    normal_covariance = np.cov(normalized_normals, rowvar=False)
+    eigenvalues, eigenvectors = np.linalg.eigh(normal_covariance)
+    axis_direction = eigenvectors[:, np.argmin(eigenvalues)]
+    axis_direction = axis_direction / max(np.linalg.norm(axis_direction), 1e-12)
+
+    normal_axis_alignment = np.abs(normalized_normals @ axis_direction)
+    sidewall_mask = normal_axis_alignment <= 0.55
+    sidewall_indices = np.flatnonzero(sidewall_mask)
+    if len(sidewall_indices) < max(100, int(len(cloud.points) * 0.08)):
+        return []
+
+    sidewall_points = points[sidewall_indices]
+    sidewall_normals = normalized_normals[sidewall_indices]
+    basis_x = _perpendicular_unit_vector(axis_direction)
+    basis_y = np.cross(axis_direction, basis_x)
+    projected_points = np.column_stack((sidewall_points @ basis_x, sidewall_points @ basis_y))
+    projected_normals = np.column_stack((sidewall_normals @ basis_x, sidewall_normals @ basis_y))
+
+    cones: list[ConePrimitive] = []
+    sidewall_clusters = _cluster_sidewall_components(projected_points, tolerances)
+    for cluster_indices in sidewall_clusters:
+        cluster_points = sidewall_points[cluster_indices]
+        cluster_normals = sidewall_normals[cluster_indices]
+        cluster_projected_points = projected_points[cluster_indices]
+        cluster_projected_normals = projected_normals[cluster_indices]
+        cluster_cloud_indices = sidewall_indices[cluster_indices]
+
+        candidate_centers = _candidate_cylinder_centers(
+            projected_points=cluster_projected_points,
+            projected_normals=cluster_projected_normals,
+            tolerances=tolerances,
+        )
+        for center_2d in candidate_centers:
+            cone = _build_cone_from_center(
+                center_2d=center_2d,
+                axis_direction=axis_direction,
+                basis_x=basis_x,
+                basis_y=basis_y,
+                cloud_points=points,
+                sidewall_points=cluster_points,
+                sidewall_normals=cluster_normals,
+                sidewall_indices=cluster_cloud_indices,
+                tolerances=tolerances,
+            )
+            if cone is not None:
+                cones.append(cone)
+
+    return _deduplicate_cones(cones, tolerances)
+
+
+def _build_cone_from_center(
+    *,
+    center_2d: NDArray[np.float64],
+    axis_direction: Vec3,
+    basis_x: Vec3,
+    basis_y: Vec3,
+    cloud_points: NDArray[np.float64],
+    sidewall_points: NDArray[np.float64],
+    sidewall_normals: NDArray[np.float64],
+    sidewall_indices: NDArray[np.int64],
+    tolerances: ToleranceConfig,
+) -> ConePrimitive | None:
+    projected_points = np.column_stack((sidewall_points @ basis_x, sidewall_points @ basis_y))
+    radial_vectors_2d = projected_points - center_2d
+    radial_distances = np.linalg.norm(radial_vectors_2d, axis=1)
+    if len(radial_distances) < 40:
+        return None
+
+    axis_origin = (center_2d[0] * basis_x) + (center_2d[1] * basis_y)
+    axis_origin = np.asarray(axis_origin, dtype=np.float64)
+    axial_distances = (sidewall_points - axis_origin) @ axis_direction
+    height_estimate = float(axial_distances.max() - axial_distances.min())
+    if height_estimate <= tolerances.linear * 3.0:
+        return None
+
+    coeffs = np.polyfit(axial_distances, radial_distances, deg=1)
+    slope = float(coeffs[0])
+    intercept = float(coeffs[1])
+    predicted_radii = (slope * axial_distances) + intercept
+    residuals = np.abs(predicted_radii - radial_distances)
+    if float(np.median(residuals)) > max(tolerances.linear * 2.0, np.median(radial_distances) * 0.08):
+        return None
+
+    min_radius = float(np.min(predicted_radii))
+    max_radius = float(np.max(predicted_radii))
+    if min_radius < -max(tolerances.linear * 2.0, 0.1):
+        return None
+    if max_radius <= tolerances.linear * 2.0:
+        return None
+    if (max_radius - max(min_radius, 0.0)) <= max(tolerances.linear * 2.5, max_radius * 0.18):
+        return None
+    if abs(slope) <= 0.04:
+        return None
+
+    normalized_radials = np.divide(
+        radial_vectors_2d,
+        np.maximum(radial_distances[:, None], 1e-12),
+    )
+    projected_normals = np.column_stack((sidewall_normals @ basis_x, sidewall_normals @ basis_y))
+    normal_alignment = np.abs(np.sum(normalized_radials * projected_normals, axis=1))
+    support_mask = (residuals <= max(tolerances.linear * 3.0, max_radius * 0.1)) & (normal_alignment >= 0.75)
+    support_indices = np.flatnonzero(support_mask)
+    if len(support_indices) < max(36, int(len(sidewall_points) * 0.08)):
+        return None
+
+    support_axial = axial_distances[support_indices]
+    support_predicted = predicted_radii[support_indices]
+    if float(np.max(support_predicted) - np.min(support_predicted)) <= max(tolerances.linear * 2.0, max_radius * 0.15):
+        return None
+
+    support_angles = np.arctan2(
+        projected_normals[support_indices, 1],
+        projected_normals[support_indices, 0],
+    )
+    occupied_bins = np.unique(np.floor(((support_angles + math.pi) / (2.0 * math.pi)) * 12.0).astype(int))
+    if len(occupied_bins) < 8:
+        return None
+
+    apex_axial = -intercept / slope
+    apex = axis_origin + (apex_axial * axis_direction)
+    support_cloud_indices = sidewall_indices[support_indices]
+    base_radius = float(np.max(support_predicted))
+    top_radius = float(max(0.0, np.min(support_predicted)))
+    semi_angle_deg = float(math.degrees(math.atan(abs(slope))))
+    if semi_angle_deg < 2.5 or semi_angle_deg > 70.0:
+        return None
+
+    confidence = Confidence(
+        score=_cone_confidence(
+            support_count=len(support_cloud_indices),
+            total_count=len(cloud_points),
+            residual=float(np.mean(residuals[support_indices])),
+            radius_span=base_radius - top_radius,
+            base_radius=base_radius,
+        ),
+        reasons=[
+            f"{len(support_cloud_indices)} supporting points",
+            f"base radius {base_radius:.4f}",
+            f"top radius {top_radius:.4f}",
+            f"semi-angle {semi_angle_deg:.4f}",
+        ],
+    )
+
+    return ConePrimitive(
+        kind=PrimitiveKind.CONE,
+        confidence=confidence,
+        region=PrimitiveRegion(
+            point_indices=support_cloud_indices.tolist(),
+            area=float(math.pi * (base_radius + top_radius) * math.hypot(height_estimate, base_radius - top_radius)),
+        ),
+        apex=np.asarray(apex, dtype=np.float64),
+        axis_direction=np.asarray(axis_direction, dtype=np.float64),
+        base_radius=base_radius,
+        top_radius=top_radius,
+        semi_angle_deg=semi_angle_deg,
+        height_estimate=height_estimate,
+    )
+
+
+def _cone_confidence(
+    support_count: int,
+    total_count: int,
+    residual: float,
+    radius_span: float,
+    base_radius: float,
+) -> float:
+    support_ratio = support_count / max(total_count, 1)
+    residual_score = 1.0 - min(residual / max(base_radius * 0.08, 1e-6), 1.0)
+    taper_score = min(radius_span / max(base_radius, 1e-6), 1.0)
+    return max(
+        0.0,
+        min(1.0, (support_ratio * 0.35) + (residual_score * 0.35) + (taper_score * 0.30)),
+    )
+
+
+def _deduplicate_cones(
+    cones: list[ConePrimitive],
+    tolerances: ToleranceConfig,
+) -> list[ConePrimitive]:
+    deduplicated: list[ConePrimitive] = []
+    for cone in sorted(cones, key=lambda item: item.confidence.score, reverse=True):
+        duplicate = False
+        for existing in deduplicated:
+            axis_alignment = abs(float(np.dot(cone.axis_direction, existing.axis_direction)))
+            apex_distance = float(np.linalg.norm(cone.apex - existing.apex))
+            base_delta = abs(cone.base_radius - existing.base_radius)
+            top_delta = abs(cone.top_radius - existing.top_radius)
+            if (
+                axis_alignment >= math.cos(math.radians(tolerances.angular_deg * 1.5))
+                and apex_distance <= max(tolerances.linear * 4.0, cone.base_radius * 0.35)
+                and base_delta <= max(tolerances.linear * 2.0, cone.base_radius * 0.12)
+                and top_delta <= max(tolerances.linear * 2.0, max(cone.top_radius, existing.top_radius, 1.0) * 0.12)
+            ):
+                duplicate = True
+                break
+        if not duplicate:
+            deduplicated.append(cone)
+    return deduplicated
+
+
+def _fit_spheres(
+    cloud: SampledCloud,
+    tolerances: ToleranceConfig,
+) -> list[SpherePrimitive]:
+    if cloud.normals is None or len(cloud.normals) == 0:
+        return []
+
+    points = np.asarray(cloud.points, dtype=np.float64)
+    normals = np.asarray(cloud.normals, dtype=np.float64)
+    if len(points) < max(120, int(len(cloud.points) * 0.1)):
+        return []
+
+    normalized_normals = _normalize_vectors(normals)
+    design = np.column_stack(
+        (
+            np.ones(len(points), dtype=np.float64),
+            normalized_normals,
+        )
+    )
+
+    solutions = [
+        np.linalg.lstsq(design, points[:, axis_index], rcond=None)[0]
+        for axis_index in range(3)
+    ]
+    center = np.array([float(solution[0]) for solution in solutions], dtype=np.float64)
+    signed_radii = [float(solutions[axis_index][1 + axis_index]) for axis_index in range(3)]
+    radius = float(np.median(np.abs(signed_radii)))
+    if radius <= tolerances.linear * 2.0:
+        return []
+
+    reconstructed = center[None, :] + (radius * normalized_normals)
+    alternate = center[None, :] - (radius * normalized_normals)
+    residual_plus = np.linalg.norm(points - reconstructed, axis=1)
+    residual_minus = np.linalg.norm(points - alternate, axis=1)
+    if float(np.mean(residual_minus)) < float(np.mean(residual_plus)):
+        residuals = residual_minus
+    else:
+        residuals = residual_plus
+
+    support_mask = residuals <= max(tolerances.linear * 3.0, radius * 0.08)
+    support_indices = np.flatnonzero(support_mask)
+    if len(support_indices) < max(80, int(len(points) * 0.18)):
+        return []
+
+    support_points = points[support_indices]
+    support_vectors = support_points - center[None, :]
+    support_distances = np.linalg.norm(support_vectors, axis=1)
+    radius_std = float(np.std(support_distances))
+    if radius_std > max(tolerances.linear * 2.0, radius * 0.08):
+        return []
+
+    support_directions = _normalize_vectors(support_vectors)
+    occupied_bins = np.unique(np.floor(((support_directions + 1.0) / 2.0) * 4.0).astype(int), axis=0)
+    if len(occupied_bins) < 18:
+        return []
+
+    confidence = Confidence(
+        score=_sphere_confidence(
+            support_count=len(support_indices),
+            total_count=len(points),
+            residual=float(np.mean(residuals[support_indices])),
+            radius_std=radius_std,
+            radius=radius,
+        ),
+        reasons=[
+            f"{len(support_indices)} supporting points",
+            f"radius {radius:.4f}",
+            f"radius std {radius_std:.4f}",
+            f"mean residual {float(np.mean(residuals[support_indices])):.4f}",
+        ],
+    )
+
+    return [
+        SpherePrimitive(
+            kind=PrimitiveKind.SPHERE,
+            confidence=confidence,
+            region=PrimitiveRegion(
+                point_indices=support_indices.tolist(),
+                area=float(4.0 * math.pi * radius * radius),
+            ),
+            center=center,
+            radius=radius,
+        )
+    ]
+
+
+def _sphere_confidence(
+    support_count: int,
+    total_count: int,
+    residual: float,
+    radius_std: float,
+    radius: float,
+) -> float:
+    support_ratio = support_count / max(total_count, 1)
+    residual_score = 1.0 - min(residual / max(radius * 0.08, 1e-6), 1.0)
+    radius_score = 1.0 - min(radius_std / max(radius * 0.08, 1e-6), 1.0)
+    return max(
+        0.0,
+        min(1.0, (support_ratio * 0.35) + (residual_score * 0.35) + (radius_score * 0.30)),
+    )
