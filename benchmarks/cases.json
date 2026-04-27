@@ -1,0 +1,34 @@
+[
+  {
+    "name": "box_prismatic",
+    "generator": "box",
+    "extents": [10.0, 6.0, 2.0],
+    "sample_count": 1500,
+    "expect_route": "prismatic_extrude",
+    "min_feature_kind_counts": {
+      "base_extrude": 1
+    }
+  },
+  {
+    "name": "cylinder_revolve_class",
+    "generator": "cylinder",
+    "radius": 2.0,
+    "height": 10.0,
+    "sample_count": 4000,
+    "expect_route": "revolve_simple",
+    "min_feature_kind_counts": {
+      "revolve": 1
+    }
+  },
+  {
+    "name": "box_point_cloud_prismatic",
+    "generator": "point_cloud_box",
+    "extents": [10.0, 6.0, 2.0],
+    "point_count": 4500,
+    "sample_count": 2000,
+    "expect_route": "prismatic_extrude",
+    "min_feature_kind_counts": {
+      "base_extrude": 1
+    }
+  }
+]

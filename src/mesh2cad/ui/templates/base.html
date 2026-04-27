@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{ title }}</title>
+    <link rel="stylesheet" href="/assets/ui.css">
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark">M2C</span>
+        <div>
+          <div class="brand-title">ViminCADConverter</div>
+          <div class="brand-subtitle">scan reconstruction console</div>
+        </div>
+      </div>
+      {% if user %}
+      <div class="topbar-actions">
+        <span class="user-badge">{{ user.username }}</span>
+        <form method="post" action="/logout">
+          <button class="ghost-button" type="submit">Sign out</button>
+        </form>
+      </div>
+      {% endif %}
+    </header>
+    <main class="shell">
+      {% block content %}{% endblock %}
+    </main>
+  </body>
+</html>

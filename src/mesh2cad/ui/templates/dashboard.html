@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="grid">
+  <div class="panel">
+    <div class="panel-head">
+      <h1>New Processing Job</h1>
+      <p>Upload mesh input, tune sampling, and decide whether to emit STEP output immediately.</p>
+    </div>
+    <form class="stack-form" method="post" action="/jobs" enctype="multipart/form-data">
+      <label>
+        <span>Source mesh</span>
+        <input type="file" name="source_file" accept=".stl,.obj,.ply" required>
+      </label>
+      <div class="inline-fields">
+        <label>
+          <span>Sample count</span>
+          <input type="number" name="sample_count" value="5000" min="100">
+        </label>
+        <label>
+          <span>Simplify target faces</span>
+          <input type="number" name="simplify_target_faces" placeholder="leave empty">
+        </label>
+      </div>
+      <label class="checkbox-row">
+        <input type="checkbox" name="build" checked>
+        <span>Attempt CAD build and STEP export</span>
+      </label>
+      <label class="checkbox-row">
+        <input type="checkbox" name="auto_tune" checked>
+        <span>Auto-tune sample count from mesh size (recommended)</span>
+      </label>
+      <button class="primary-button" type="submit">Process File</button>
+    </form>
+  </div>
+
+  <div class="panel">
+    <div class="panel-head">
+      <h2>Job History</h2>
+      <p>Each job keeps its upload, report payload, generated script, and STEP output when available.</p>
+    </div>
+    <div class="job-table">
+      <div class="job-table-head">
+        <span>Job</span>
+        <span>Status</span>
+        <span>Created</span>
+      </div>
+      {% for job in jobs %}
+      <a class="job-row" href="/jobs/{{ job.id }}">
+        <span class="job-name">{{ job.original_name }}</span>
+        <span class="status status-{{ job.status }}">{{ job.status }}</span>
+        <span>{{ job.created_at }}</span>
+      </a>
+      {% else %}
+      <div class="job-row empty-row">No jobs have been submitted yet.</div>
+      {% endfor %}
+    </div>
+  </div>
+</section>
+{% endblock %}

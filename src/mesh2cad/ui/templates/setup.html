@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="auth-panel">
+  <div class="panel-head">
+    <h1>Initial Setup</h1>
+    <p>Create the first administrative account for this ViminCADConverter deployment.</p>
+  </div>
+  {% if error %}
+  <div class="error-box">{{ error }}</div>
+  {% endif %}
+  <form class="stack-form" method="post" action="/setup">
+    <label>
+      <span>Admin username</span>
+      <input type="text" name="username" minlength="3" required>
+    </label>
+    <label>
+      <span>Admin password</span>
+      <input type="password" name="password" minlength="8" required>
+    </label>
+    <button class="primary-button" type="submit">Create Admin Account</button>
+  </form>
+</section>
+{% endblock %}

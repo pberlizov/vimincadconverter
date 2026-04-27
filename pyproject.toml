@@ -1,0 +1,65 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mesh2cad"
+version = "0.1.0"
+description = "ViminCADConverter: mesh and point-cloud reverse engineering to parametric CAD (build123d)."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [
+  { name = "ViminCADConverter contributors" }
+]
+dependencies = [
+  "numpy>=1.26",
+  "trimesh>=4.4",
+  "scipy>=1.13",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.2",
+]
+api = [
+  "fastapi>=0.136",
+  "pydantic>=2.4",
+  "jinja2>=3.1",
+  "python-multipart>=0.0.20",
+  "uvicorn>=0.46",
+]
+ui = [
+  "fastapi>=0.136",
+  "pydantic>=2.4",
+  "jinja2>=3.1",
+  "python-multipart>=0.0.20",
+  "uvicorn>=0.46",
+]
+full = [
+  "open3d>=0.19",
+  "build123d>=0.8",
+  "fastapi>=0.136",
+  "gradio>=5.0",
+  "jinja2>=3.1",
+  "python-multipart>=0.0.20",
+  "uvicorn>=0.46",
+]
+queue = [
+  "redis>=5",
+  "rq>=2.0",
+]
+
+[project.scripts]
+mesh2cad = "mesh2cad.main:main"
+mesh2cad-api = "mesh2cad.api.app:main"
+mesh2cad-ui = "mesh2cad.ui.gradio_app:main"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
