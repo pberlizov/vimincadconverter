@@ -1,6 +1,6 @@
 # ViminCADConverter benchmarks
 
-`cases.json` lists lightweight regression scenarios. Each case is synthetic geometry generated at test time (no large binaries in git). The runner lives in `mesh2cad.benchmarks.runner` and is exercised by `tests/test_benchmarks.py`.
+`cases.json` lists lightweight regression scenarios. Each case is synthetic geometry generated at test time (no large binaries in git). The runner lives in `mesh2cad.benchmarks.runner` and is exercised by `tests/test_benchmarks.py`. A case may set **`build_export`: true** to write STEP/STL under the temp dir (requires **build123d**; the parametrized test skips otherwise). **`expect_warning_substr`** matches any merged pipeline warning substring after that run.
 
 Environment variables:
 

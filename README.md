@@ -49,6 +49,12 @@ mesh2cad-ui    # minimal Gradio panel (http://127.0.0.1:7860) if gradio is insta
 
 Browser UI: setup admin user, sign in, upload mesh, download report/script/STEP, see **structured failure** blocks when jobs fail.
 
+## Security and privacy
+
+- Processing is **local** by default; this repo does not embed calls to paid third-party “AI mesh” APIs.
+- **Do not commit** real API keys, tokens, or production passwords (`.env` is gitignored). Automated tests use **dummy** credentials only; change defaults for real deployments.
+- If a secret is ever pasted into chat, a ticket, or a commit, **revoke and rotate** it immediately—assume it is compromised.
+
 ## Environment
 
 | Variable | Purpose |
@@ -60,7 +66,7 @@ Browser UI: setup admin user, sign in, upload mesh, download report/script/STEP,
 
 ## Benchmarks & north star
 
-- Catalog: `benchmarks/cases.json` (synthetic meshes, no large binaries). Runner: `mesh2cad.benchmarks.runner`.
+- Catalog: `benchmarks/cases.json` (synthetic meshes, no large binaries). Runner: `mesh2cad.benchmarks.runner`. Cases may set **`build_export`: true** to run STEP/STL export (needs optional **build123d**); optional **`expect_warning_substr`** checks merged pipeline warnings (for example validation surface strings).
 - Product intent and acceptance focus: `docs/NORTH_STAR.md`.
 
 ## Development

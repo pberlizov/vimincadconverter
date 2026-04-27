@@ -30,5 +30,17 @@
     "min_feature_kind_counts": {
       "base_extrude": 1
     }
+  },
+  {
+    "name": "box_prismatic_build_export_validation",
+    "generator": "box",
+    "extents": [10.0, 6.0, 2.0],
+    "sample_count": 2200,
+    "build_export": true,
+    "expect_route": "prismatic_extrude",
+    "expect_warning_substr": "surface rms",
+    "min_feature_kind_counts": {
+      "base_extrude": 1
+    }
   }
 ]

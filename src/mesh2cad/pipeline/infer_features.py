@@ -11,8 +11,14 @@ from mesh2cad.domain.features import (
     BlindHoleFeature,
     BossFeature,
     Feature,
+    PocketFeature,
     ThroughHoleFeature,
 )
+
+# Cylinder height (along stock) vs stock depth: stricter split reduces mis-labeling.
+_THROUGH_CYLINDER_MIN_DEPTH_RATIO = 0.78
+_BLIND_CYLINDER_MAX_DEPTH_RATIO = 0.58
+_BLIND_CYLINDER_MIN_DEPTH_RATIO = 0.20
 from mesh2cad.domain.primitives import CylinderPrimitive, PlanePrimitive, Primitive
 from mesh2cad.domain.types import Confidence, FeatureKind, ToleranceConfig
 from mesh2cad.mesh.analysis import SceneAnalysis
@@ -79,6 +85,15 @@ def infer_features(
     )
     if bosses:
         features.extend(bosses)
+
+    pockets = _infer_planar_pockets(
+        plane_primitives=plane_primitives,
+        base_extrude=base_extrude,
+        cloud=cloud,
+        tolerances=tolerances,
+    )
+    if pockets:
+        features.extend(pockets)
 
     return FeatureInferenceResult(features=features, warnings=warnings)
 
@@ -172,7 +187,7 @@ def _infer_through_holes(
         if cylinder.height_estimate is None:
             continue
 
-        if cylinder.height_estimate < base_extrude.depth * 0.75:
+        if cylinder.height_estimate < base_extrude.depth * _THROUGH_CYLINDER_MIN_DEPTH_RATIO:
             continue
 
         offset = np.asarray(cylinder.axis_origin, dtype=np.float64) - origin
@@ -236,9 +251,9 @@ def _infer_blind_holes(
         h = cylinder.height_estimate
         if h is None:
             continue
-        if h >= 0.75 * depth:
+        if h >= depth * _THROUGH_CYLINDER_MIN_DEPTH_RATIO:
             continue
-        if h < 0.18 * depth or h > 0.62 * depth:
+        if h < depth * _BLIND_CYLINDER_MIN_DEPTH_RATIO or h > depth * _BLIND_CYLINDER_MAX_DEPTH_RATIO:
             continue
 
         offset = np.asarray(cylinder.axis_origin, dtype=np.float64) - origin
@@ -336,6 +351,107 @@ def _deduplicate_blind_holes(
     return deduplicated
 
 
+def _infer_planar_pockets(
+    plane_primitives: list[PlanePrimitive],
+    base_extrude: BaseExtrudeFeature,
+    cloud: SampledCloud,
+    tolerances: ToleranceConfig,
+) -> list[PocketFeature]:
+    """Shallow voids from two small interior parallel planes (opposing normals) along extrusion."""
+    z_dir = np.asarray(base_extrude.sketch_plane["z_dir"], dtype=np.float64)
+    z_dir = z_dir / max(np.linalg.norm(z_dir), 1e-12)
+    basis_x = np.asarray(base_extrude.sketch_plane["x_dir"], dtype=np.float64)
+    basis_y = np.asarray(base_extrude.sketch_plane["y_dir"], dtype=np.float64)
+    origin = np.asarray(base_extrude.sketch_plane["origin"], dtype=np.float64)
+    depth = float(base_extrude.depth)
+    profile_loop = base_extrude.profile_loops[0]
+    profile_area = abs(_signed_polygon_area(profile_loop))
+    if profile_area <= 1e-9:
+        return []
+
+    max_pocket_plane_area = profile_area * 0.42
+    min_gap = depth * 0.055
+    max_gap = min(depth * 0.48, depth * 0.92)
+    edge_tol = max(tolerances.linear * 3.0, depth * 0.04)
+
+    slabs: list[tuple[PlanePrimitive, float]] = []
+    for plane in plane_primitives:
+        cos_align = abs(float(np.dot(plane.normal, z_dir)))
+        if cos_align < math.cos(math.radians(tolerances.angular_deg * 3.0)):
+            continue
+        t = float(np.dot(plane.origin - origin, z_dir))
+        if t <= edge_tol or t >= depth - edge_tol:
+            continue
+        a = float(plane.region.area)
+        if a > max_pocket_plane_area or a < max(tolerances.min_region_area * 0.45, profile_area * 0.004):
+            continue
+        slabs.append((plane, t))
+
+    slabs.sort(key=lambda item: item[1])
+    pockets: list[PocketFeature] = []
+    used_pairs: set[tuple[int, int]] = set()
+
+    for i in range(len(slabs)):
+        for j in range(i + 1, len(slabs)):
+            p0, t0 = slabs[i]
+            p1, t1 = slabs[j]
+            key = (i, j)
+            if key in used_pairs:
+                continue
+            gap = t1 - t0
+            if gap < min_gap or gap > max_gap:
+                continue
+            if float(np.dot(p0.normal, p1.normal)) > -0.42:
+                continue
+
+            idx = sorted(set(p0.region.point_indices) | set(p1.region.point_indices))
+            if len(idx) < 4:
+                continue
+            pts = np.asarray(cloud.points[idx], dtype=np.float64)
+            local_x = (pts - origin) @ basis_x
+            local_y = (pts - origin) @ basis_y
+            try:
+                loop_2d = _convex_profile_loop(np.column_stack((local_x, local_y)))
+            except Exception:
+                continue
+            pocket_area = abs(_signed_polygon_area(loop_2d))
+            if pocket_area > profile_area * 0.55 or pocket_area < tolerances.min_region_area * 0.08:
+                continue
+            centroid = (float(np.mean(local_x)), float(np.mean(local_y)))
+            if not _point_in_polygon(centroid, profile_loop):
+                continue
+            if _point_to_polygon_edges_distance(centroid, profile_loop) < max(
+                tolerances.linear * 2.0,
+                0.05 * math.sqrt(max(pocket_area, 1e-12)),
+            ):
+                continue
+
+            pocket_depth = float(min(gap * 1.04 + tolerances.linear, depth * 0.9))
+            confidence = Confidence(
+                score=0.62,
+                reasons=[
+                    "interior parallel pocket faces",
+                    f"pocket_depth {pocket_depth:.4f}",
+                ],
+            )
+            pockets.append(
+                PocketFeature(
+                    kind=FeatureKind.POCKET,
+                    confidence=confidence,
+                    parameters={"pocket_depth": pocket_depth},
+                    references={},
+                    profile_loop=loop_2d,
+                    pocket_depth=pocket_depth,
+                )
+            )
+            used_pairs.add(key)
+            used_pairs.add((j, i))
+            if len(pockets) >= 2:
+                return pockets
+
+    return pockets
+
+
 def _infer_bosses(
     cylinder_primitives: list[CylinderPrimitive],
     base_extrude: BaseExtrudeFeature,
@@ -347,7 +463,7 @@ def _infer_bosses(
     basis_x = np.asarray(base_extrude.sketch_plane["x_dir"], dtype=np.float64)
     basis_y = np.asarray(base_extrude.sketch_plane["y_dir"], dtype=np.float64)
     origin = np.asarray(base_extrude.sketch_plane["origin"], dtype=np.float64)
-    max_height = max(base_extrude.depth * 0.75, tolerances.linear * 3.0)
+    max_height = max(base_extrude.depth * _THROUGH_CYLINDER_MIN_DEPTH_RATIO, tolerances.linear * 3.0)
 
     bosses: list[BossFeature] = []
     for cylinder in cylinder_primitives:
@@ -687,7 +803,10 @@ def _select_plausible_hole_family(
         ),
     )
 
-    if np.median([hole.radius for hole in selected_family]) > max(base_extrude.depth * 0.75, tolerances.linear * 4.0):
+    if np.median([hole.radius for hole in selected_family]) > max(
+        base_extrude.depth * _THROUGH_CYLINDER_MIN_DEPTH_RATIO,
+        tolerances.linear * 4.0,
+    ):
         return holes
 
     return sorted(selected_family, key=lambda hole: (hole.center_xy[0], hole.center_xy[1]))

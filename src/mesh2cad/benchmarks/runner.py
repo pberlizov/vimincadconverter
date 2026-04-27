@@ -56,9 +56,12 @@ def _make_mesh(case: dict[str, Any]) -> trimesh.Trimesh:
 
 def run_case(case: dict[str, Any], *, tmp_dir: Path, auto_tune: bool = False) -> PipelineResult:
     path = _make_input_mesh_path(case, tmp_dir)
+    output_dir = None
+    if case.get("build_export"):
+        output_dir = tmp_dir / f"{case['name']}_cad"
     return run_pipeline(
         path,
-        output_dir=None,
+        output_dir=output_dir,
         sample_count=int(case.get("sample_count", 3000)),
         auto_tune_sampling=auto_tune,
     )
@@ -70,6 +73,10 @@ def assert_case_expectations(case: dict[str, Any], result: PipelineResult) -> No
     min_counts: dict[str, int] = case.get("min_feature_kind_counts") or {}
     for kind, minimum in min_counts.items():
         assert result.feature_kinds.count(kind) >= int(minimum), (case["name"], kind, result.feature_kinds)
+    if case.get("build_export"):
+        assert result.build is not None, case["name"]
+        assert result.build.build_success, (case["name"], result.build.warnings if result.build else [])
+
     substr = case.get("expect_warning_substr")
     if substr:
         assert any(substr in w for w in result.warnings), (case["name"], result.warnings)
