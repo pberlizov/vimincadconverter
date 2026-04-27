@@ -30,7 +30,11 @@ def _is_hole_axis_aligned(axis_direction: tuple[float, float, float], z_dir: tup
 
 
 def generate_script(features: list[Feature]) -> str:
-    """Generate a narrow build123d script for the currently supported feature set."""
+    """Generate a narrow build123d script for the currently supported feature set.
+
+    This includes base extrusion, aligned through-holes, and angled through-hole support
+    by generating dedicated sketch planes for non-aligned cylinder axes.
+    """
     revolve_feature = next((feature for feature in features if isinstance(feature, RevolveSolidFeature)), None)
     base_feature = next(
         (feature for feature in features if isinstance(feature, BaseExtrudeFeature)),

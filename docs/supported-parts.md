@@ -17,7 +17,7 @@ Characteristics:
 
 - dominant opposing planar faces
 - one clear extrusion direction
-- holes roughly aligned to that extrusion axis
+- holes roughly aligned to that extrusion axis, including first-pass support for angled through-hole axes when cylinder inference finds an entry/exit through the top and bottom faces
 - mechanical rather than organic surfaces
 
 ## Partially supported
@@ -55,7 +55,10 @@ There is no robust verified boss or pocket inference yet.
 
 ### Non-parallel or angled hole systems
 
-Cylinder fitting and hole inference are still tuned for roughly parallel mechanical configurations.
+Current state:
+
+- angled through-holes are now partially supported when the underlying cylinder primitive axis crosses the inferred stock faces and the hole fits the base profile.
+- more complex skewed countersinks/counterbores and non-axial blind holes are not yet fully supported.
 
 ### Organic or freeform surfaces
 

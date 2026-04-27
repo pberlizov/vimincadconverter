@@ -48,6 +48,21 @@ Current policy:
 
 - treat some of these cases as degraded-but-structured rather than total failure
 
+### Angled through-hole inference failures
+
+Symptom:
+
+- a cylinder primitive is present, but the inferred hole feature is not recognized as through-hole because the axis does not sufficiently intersect the expected top/bottom faces or the profile fit is marginal.
+
+Known triggers:
+
+- angled/non-parallel hole axes with noisy mesh regions around face intersections
+- ambiguous entry/exit points at the stock boundary
+
+Current policy:
+
+- preserve base extrusion recovery where possible and emit warnings rather than failing the entire pipeline
+
 ### Extra holes on scan-like meshes
 
 Symptom:

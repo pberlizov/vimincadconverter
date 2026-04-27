@@ -1,0 +1,20 @@
+services:
+  api:
+    build: .
+    ports:
+      - "${MESH2CAD_HOST_PORT:-8000}:8000"
+    environment:
+      MESH2CAD_STATE_DIR: /data/state
+      MESH2CAD_BIND_HOST: "0.0.0.0"
+      MESH2CAD_BIND_PORT: "8000"
+    volumes:
+      - mesh2cad_state:/data/state
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS \"http://127.0.0.1:$${MESH2CAD_BIND_PORT}/ready\" >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 25s
+
+volumes:
+  mesh2cad_state:

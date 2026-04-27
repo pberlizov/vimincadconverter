@@ -38,4 +38,15 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[dev,api]" "build123d>=0.8"
       - name: Run build123d-dependent tests
-        run: python -m pytest -q tests/test_mesh_pipeline_smoke.py -k validate_reconstruction
+        run: |
+          python -m pytest -q tests/test_mesh_pipeline_smoke.py -k validate_reconstruction
+          python -m pytest -q tests/test_benchmarks.py
+
+  docker-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate compose file
+        run: docker compose config -q
+      - name: Build API image
+        run: docker build -t mesh2cad:ci .

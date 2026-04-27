@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -224,6 +225,12 @@ def _point_to_mesh_distances(
     points: np.ndarray,
     target_mesh: trimesh.Trimesh,
 ) -> np.ndarray:
+    if os.environ.get("MESH2CAD_USE_OPEN3D_METRICS", "").strip().lower() in {"1", "true", "yes", "on"}:
+        from mesh2cad.mesh.open3d_distance import point_to_mesh_distances_open3d
+
+        alt = point_to_mesh_distances_open3d(points, target_mesh)
+        if alt is not None and alt.shape[0] == len(points):
+            return alt
     try:
         query = trimesh.proximity.ProximityQuery(target_mesh)
         _, distances, _ = query.on_surface(points)

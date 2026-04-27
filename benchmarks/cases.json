@@ -89,5 +89,25 @@
     "min_feature_kind_counts": {
       "revolve": 1
     }
+  },
+  {
+    "name": "two_hole_plate_prismatic_through_holes",
+    "generator": "build123d_two_hole_plate",
+    "scale": 1.0,
+    "sample_count": 4500,
+    "expect_route": "prismatic_extrude",
+    "tolerances": {
+      "linear": 0.2,
+      "angular_deg": 4.0,
+      "min_region_area": 2.0
+    },
+    "min_feature_kind_counts": {
+      "base_extrude": 1,
+      "through_hole": 2
+    },
+    "min_primitive_kind_counts": {
+      "cylinder": 2,
+      "plane": 2
+    }
   }
 ]

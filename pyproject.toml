@@ -51,6 +51,9 @@ queue = [
   "redis>=5",
   "rq>=2.0",
 ]
+open3d = [
+  "open3d>=0.19",
+]
 
 [project.scripts]
 mesh2cad = "mesh2cad.main:main"

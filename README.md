@@ -6,8 +6,23 @@ The installable Python package and CLI entry points keep the name **`mesh2cad`**
 
 Scope today:
 
-- **Prismatic route**: paired parallel planes → base extrusion profile (convex or simple concave), optional **through-holes** from cylinder fits.
+- **Prismatic route**: paired parallel planes → base extrusion profile (convex or simple concave), with optional through-holes inferred from cylinder fits, including angled/non-parallel through-hole axes when the hole axis intersects the stock faces.
 - **Rotational route**: when the global shape looks like a solid of revolution and a strong **cylinder** primitive exists, emit a **pose-aware revolve** script (`REVOLVE_PLANE` + `Axis(ORIGIN, AXIS_DIR)` from the inferred axis).
+- **Build123d script-first synthesis**: generated Python code can be executed later when `build123d` is installed to produce `STEP` and preview `STL` exports.
+
+Current CAD feature support:
+
+- `BaseExtrudeFeature` recovery from paired parallel stock faces and an extrusion profile.
+- `ThroughHoleFeature` inference from cylinder primitives, including angled hole axes whose cylinder passes through the stock faces.
+- `RevolveSolidFeature` for simple rotational parts when a strong cylinder primitive dominates.
+- generated `build123d` script output, with optional execution to produce `STEP` and preview `STL`.
+- alignment-sensitive `BlindHoleFeature` and `CounterSinkHoleFeature` support in the current pipeline, with skewed through-hole variants still limited.
+
+Current limitations:
+
+- boss/pocket inference is not yet robust for general noisy inputs.
+- countersink and blind hole inference remains aligned-axis only and does not yet support fully skewed or compound angled cut features.
+- unsupported: organic freeform geometry, assemblies, sheet-metal-specific reasoning, and advanced feature-tree semantics.
 
 ## Roadmap (depth and breadth)
 
@@ -23,6 +38,7 @@ pip install -e ".[dev]"        # pytest
 pip install -e ".[api]"       # FastAPI + uvicorn + pydantic
 pip install -e ".[full]"      # adds build123d, open3d, gradio, …
 pip install -e ".[queue]"     # optional: redis + rq for future durable workers
+pip install -e ".[open3d]"    # optional: Open3d for MESH2CAD_USE_OPEN3D_METRICS (also in [full])
 ```
 
 Requires **Python ≥ 3.11**.
@@ -39,7 +55,7 @@ mesh2cad cloud.xyz --no-build --icp-iterations 15   # point cloud input; validat
 ## HTTP API & UI
 
 ```bash
-mesh2cad-api   # http://127.0.0.1:8000
+mesh2cad-api   # http://127.0.0.1:8000 (set MESH2CAD_BIND_HOST / MESH2CAD_BIND_PORT for containers)
 mesh2cad-ui    # Gradio panel (http://127.0.0.1:7860): path or file upload, JSON + downloads (report / script / STEP / preview STL); temp work under $TMPDIR or MESH2CAD_STATE_DIR
 ```
 
@@ -81,6 +97,9 @@ Browser UI: setup admin user, sign in, upload mesh, download report/script/STEP,
 | `MESH2CAD_MAX_REQUEST_MB` | Max `Content-Length` for POST/PUT/PATCH (default `256` MiB). |
 | `MESH2CAD_MAX_REQUEST_BYTES` | Optional exact byte cap (overrides MB when set). |
 | `MESH2CAD_JOB_WORKERS` | Thread-pool size for async jobs (default `2`). |
+| `MESH2CAD_BIND_HOST` | Uvicorn bind address for **`mesh2cad-api`** (default `127.0.0.1`; use `0.0.0.0` in containers). |
+| `MESH2CAD_BIND_PORT` | Uvicorn port (default `8000`). |
+| `MESH2CAD_USE_OPEN3D_METRICS` | When `true`/`1` and `open3d` is installed, validation uses Open3D raycasting for point-to-mesh distances (falls back to trimesh otherwise). |
 | `MESH2CAD_JOB_RETENTION_DAYS` | Default for **`mesh2cad-purge-jobs --days`** (see below). |
 | `MESH2CAD_WEBHOOK_ALLOW_HTTP` | Set `true` to allow `http://` webhook URLs (dev only). |
 
@@ -99,9 +118,13 @@ Run on a schedule (e.g. weekly cron) so `MESH2CAD_STATE_DIR` does not grow witho
 - **Today:** SQLite, on-disk job artifacts, in-process rate limits, and the thread-pool job runner are **single-host assumptions**. Run **one API/worker replica** per `MESH2CAD_STATE_DIR`, or use **sticky sessions** and accept that rate limits are per-process.
 - **Horizontal scale:** use a **shared queue + object storage** (the optional **`[queue]`** extra points at Redis/RQ) and move job metadata off SQLite, or partition one writer for the DB.
 
+### Docker
+
+A non-root image and `docker compose` stack live at the repo root (`Dockerfile`, `docker-compose.yml`): state under **`MESH2CAD_STATE_DIR`**, health checks on **`GET /ready`**, and **`curl`**-based `HEALTHCHECK`. See **[docs/deploy-docker.md](docs/deploy-docker.md)** for scaling notes (one writer per SQLite volume vs queue-based scale-out).
+
 ## Benchmarks & north star
 
-- Catalog: `benchmarks/cases.json` (synthetic meshes, no large binaries). Runner: `mesh2cad.benchmarks.runner`. Cases may set **`build_export`: true** to run STEP/STL export (needs optional **build123d**); optional **`expect_warning_substr`** checks merged pipeline warnings (for example validation surface strings).
+- Catalog: `benchmarks/cases.json` (synthetic meshes, no large binaries). Runner: `mesh2cad.benchmarks.runner`. Cases may set **`build_export`: true** to run STEP/STL export (needs optional **build123d**); optional **`expect_warning_substr`** checks merged pipeline warnings (for example validation surface strings). The **`build123d_two_hole_plate`** generator materializes a preview STL via **build123d** (skipped in `pytest` when build123d is not installed); CI runs those cases in the **test-with-build123d** workflow job.
 - Product intent and acceptance focus: `docs/NORTH_STAR.md`.
 
 ## Development

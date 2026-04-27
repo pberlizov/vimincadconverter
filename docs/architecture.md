@@ -39,12 +39,12 @@ Modules:
 Responsibilities:
 
 - recover primitive hypotheses such as planes and cylinders
-- infer higher-level CAD-like features from primitive relationships
+- infer higher-level CAD-like features from primitive relationships, including through-hole and angled through-hole inference from cylinder fits
 - choose between the current prismatic and rotational routes
 
 Current route split:
 
-- prismatic route: paired planes -> extrusion profile -> through-hole candidates
+- prismatic route: paired planes -> extrusion profile -> through-hole candidates, including angled through-holes when cylinder axes cross the inferred stock faces
 - rotational route: dominant cylinder -> revolve feature -> pose-aware revolve script
 
 ### CAD synthesis and export

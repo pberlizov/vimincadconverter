@@ -40,7 +40,13 @@ def infer_features(
     cloud: SampledCloud,
     tolerances: ToleranceConfig,
 ) -> FeatureInferenceResult:
-    """Infer a narrow first pass of CAD-like features from primitives."""
+    """Infer a narrow first pass of CAD-like features from primitives.
+
+    Currently supported feature inference includes:
+    - base extrusion from paired parallel planes
+    - through-holes from cylinder primitives, including angled hole axes where the cylinder axis crosses the base stock faces
+    - complemented rotational inference for strong cylinder-driven revolve solids
+    """
     del scene
 
     plane_primitives = [primitive for primitive in primitives if isinstance(primitive, PlanePrimitive)]
@@ -400,6 +406,12 @@ def _infer_through_holes(
     base_extrude: BaseExtrudeFeature,
     tolerances: ToleranceConfig,
 ) -> list[ThroughHoleFeature]:
+    """Infer through-hole features from cylinder primitives.
+
+    This path supports holes whose axis is not exactly aligned with the extrusion axis,
+    provided the cylinder passes through the inferred stock faces and the entry/exit
+    points lie within or near the base profile.
+    """
     extrusion_axis = np.asarray(base_extrude.sketch_plane["z_dir"], dtype=np.float64)
     basis_x = np.asarray(base_extrude.sketch_plane["x_dir"], dtype=np.float64)
     basis_y = np.asarray(base_extrude.sketch_plane["y_dir"], dtype=np.float64)

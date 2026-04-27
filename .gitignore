@@ -12,6 +12,7 @@ htmlcov/
 *.sqlite3
 .env
 .venv/
+.venv-bench/
 venv/
 *.stl
 *.step

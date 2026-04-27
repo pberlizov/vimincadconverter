@@ -184,4 +184,10 @@ def main() -> None:
     except ImportError as exc:  # pragma: no cover
         raise RuntimeError("uvicorn is not installed. Install the API extras to run the server.") from exc
 
-    uvicorn.run(create_app(), host="127.0.0.1", port=8000)
+    host = os.environ.get("MESH2CAD_BIND_HOST", "127.0.0.1").strip() or "127.0.0.1"
+    port_raw = os.environ.get("MESH2CAD_BIND_PORT", "8000").strip() or "8000"
+    try:
+        port = int(port_raw)
+    except ValueError:
+        port = 8000
+    uvicorn.run(create_app(), host=host, port=port)
