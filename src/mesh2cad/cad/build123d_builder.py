@@ -7,6 +7,8 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any
 
+from mesh2cad.security.cad_script_runtime import cad_script_safe_builtins
+
 
 @dataclass(slots=True)
 class BuildResult:
@@ -77,10 +79,8 @@ def _load_build123d_runtime() -> dict[str, Any] | None:
     if export_stl is None:
         raise AttributeError("No compatible build123d export_stl function is available.")
 
-    runtime_globals = {
-        "__builtins__": __builtins__,
-        **_public_module_symbols(build123d_module),
-    }
+    runtime_globals = dict(cad_script_safe_builtins())
+    runtime_globals.update(_public_module_symbols(build123d_module))
     return {
         "globals": runtime_globals,
         "export_step": export_step,

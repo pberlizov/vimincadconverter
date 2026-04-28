@@ -50,6 +50,7 @@ def test_rate_limit_on_v1_process(monkeypatch, tmp_path) -> None:
     import trimesh
 
     monkeypatch.delenv("MESH2CAD_API_KEYS", raising=False)
+    monkeypatch.setenv("MESH2CAD_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("MESH2CAD_RATE_LIMIT_PER_MINUTE", "3")
     box = trimesh.creation.box(extents=(1, 1, 1))
     p = tmp_path / "r.stl"

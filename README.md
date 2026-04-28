@@ -156,7 +156,7 @@ The project is **deployable today** as a **single-tenant** service: one persiste
 | **`MESH2CAD_API_KEYS`** on any untrusted network | `/v1` is otherwise open. |
 | **Redis + RQ** for production-ish load | `docker-compose.queue.yml` or **`kubectl apply -k deploy/k8s`** so long runs do not block Uvicorn; see **[docs/operations.md](docs/operations.md)**. |
 | **Backups + retention** | `scripts/backup-mesh2cad-state.sh` (host) or `kubectl exec` + `tar` (see operations doc); schedule **`mesh2cad-purge-jobs`**. |
-| **Observability (optional)** | **`MESH2CAD_LOG_JSON`**, **`MESH2CAD_LOG_LEVEL`**; **`MESH2CAD_METRICS_ENABLED`** for Prometheus (protect **`/metrics`** at the network edge). |
+| **Observability (optional)** | **`MESH2CAD_LOG_JSON`**, **`MESH2CAD_LOG_LEVEL`**; **`MESH2CAD_METRICS_ENABLED`** for Prometheus — **`GET /metrics`** uses the same **`MESH2CAD_API_KEYS`** rules as **`/v1`** when keys are set (open when unset; still prefer network policy). |
 
 **Prebuilt images:** CI can publish **`ghcr.io/<owner>/<repo>:latest`** (API + queue client) and **`:cad`** (includes **build123d** for in-container STEP export). Pull and point your compose or Kubernetes manifests at those tags.
 
@@ -172,12 +172,12 @@ The project is **deployable today** as a **single-tenant** service: one persiste
 | `MESH2CAD_JOB_TIMEOUT_SEC` | Worker subprocess wall clock (default `900`). |
 | `MESH2CAD_MAX_UPLOAD_MB` | UI and `/v1` upload cap. |
 | `MESH2CAD_SECURE_COOKIES` | Set `true` behind HTTPS. |
-| `MESH2CAD_API_KEYS` | Comma-separated keys required for `/v1/*` when set. |
+| `MESH2CAD_API_KEYS` | Comma-separated keys required for **`/v1/*`**, legacy **`/process*`**, and **`GET /metrics`** (when metrics are enabled) whenever this variable is non-empty. |
 | `MESH2CAD_WEBHOOK_SECRET` | Optional HMAC key for job webhooks (`sha256=` prefix on `X-Mesh2cad-Signature`). |
 | `MESH2CAD_CORS_ORIGINS` | Comma-separated allowed origins for CORS. |
 | `MESH2CAD_LOG_LEVEL` | Python log level (`INFO`, `DEBUG`, …). |
 | `MESH2CAD_LOG_JSON` | Set `true` for JSON lines on stderr (ingestion-friendly). |
-| `MESH2CAD_METRICS_ENABLED` | Set `true` to expose Prometheus text at **`GET /metrics`** (no API key; protect with network policy). |
+| `MESH2CAD_METRICS_ENABLED` | Set `true` to expose Prometheus text at **`GET /metrics`**. When **`MESH2CAD_API_KEYS`** is set, clients must send the same **`X-API-Key`** / Bearer token as for **`/v1`**. |
 | `MESH2CAD_RATE_LIMIT_PER_MINUTE` | Per-client-IP cap on `POST /v1/process`, `POST /v1/jobs`, `POST /process` (default `120`). |
 | `MESH2CAD_RATE_LIMIT_BACKEND` | Set **`redis`** with **`MESH2CAD_REDIS_URL`** for shared rate limits across API replicas. |
 | `MESH2CAD_RATE_LIMIT_REDIS_PREFIX` | Redis key prefix for rate counters (default `mesh2cad:rl`). |
@@ -195,6 +195,9 @@ The project is **deployable today** as a **single-tenant** service: one persiste
 | `MESH2CAD_OPEN3D_CLOUD_MIN_POINTS` | Minimum point count to switch normal estimation to Open3D (default `50000`). |
 | `MESH2CAD_JOB_RETENTION_DAYS` | Default for **`mesh2cad-purge-jobs --days`** (see below). |
 | `MESH2CAD_WEBHOOK_ALLOW_HTTP` | Set `true` to allow `http://` webhook URLs (dev only). |
+| `MESH2CAD_RELAX_INPUT_PATH_GUARD` | Set `true`/`1`/`on` to allow JSON **`input_path`** / **`output_dir`** outside **`MESH2CAD_STATE_DIR`** (local debugging only; **never** on untrusted networks). |
+
+**HTTP API path policy:** JSON bodies that reference **`input_path`** (and optional **`output_dir`**) on the server must resolve to paths **under `MESH2CAD_STATE_DIR`** unless **`MESH2CAD_RELAX_INPUT_PATH_GUARD`** is enabled. Use multipart uploads or copy inputs into the state directory for production.
 
 ### Job retention
 

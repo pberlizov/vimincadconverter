@@ -11,6 +11,12 @@ from fastapi.testclient import TestClient
 from mesh2cad.api.app import create_app
 
 
+@pytest.fixture(autouse=True)
+def _v1_state_dir(tmp_path, monkeypatch):
+    """HTTP API JSON paths must live under MESH2CAD_STATE_DIR (strict guard)."""
+    monkeypatch.setenv("MESH2CAD_STATE_DIR", str(tmp_path))
+
+
 @pytest.fixture
 def client(monkeypatch):
     monkeypatch.delenv("MESH2CAD_API_KEYS", raising=False)
@@ -31,17 +37,27 @@ def test_ready(client: TestClient) -> None:
     assert "ready" in data
 
 
-def test_v1_requires_api_key_when_configured(monkeypatch) -> None:
+def test_v1_requires_api_key_when_configured(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("MESH2CAD_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("MESH2CAD_API_KEYS", "secret-one,secret-two")
     app_client = TestClient(create_app())
-    r = app_client.post("/v1/process", json={"input_path": "/no/such", "build": False})
+    missing = str(tmp_path / "missing.stl")
+    r = app_client.post("/v1/process", json={"input_path": missing, "build": False})
     assert r.status_code == 401
     r2 = app_client.post(
         "/v1/process",
-        json={"input_path": "/no/such", "build": False},
+        json={"input_path": missing, "build": False},
         headers={"X-API-Key": "secret-one"},
     )
     assert r2.status_code == 400
+
+
+def test_v1_process_rejects_input_outside_state_dir(monkeypatch, tmp_path) -> None:
+    monkeypatch.delenv("MESH2CAD_API_KEYS", raising=False)
+    app_client = TestClient(create_app())
+    r = app_client.post("/v1/process", json={"input_path": "/etc/hosts", "build": False})
+    assert r.status_code == 400
+    assert "MESH2CAD_STATE_DIR" in r.json().get("detail", "")
 
 
 def test_v1_process_json_no_build(tmp_path, monkeypatch) -> None:
@@ -72,7 +88,6 @@ def test_v1_process_json_no_build(tmp_path, monkeypatch) -> None:
 
 def test_v1_process_multipart_session_artifacts(tmp_path, monkeypatch) -> None:
     monkeypatch.delenv("MESH2CAD_API_KEYS", raising=False)
-    monkeypatch.setenv("MESH2CAD_STATE_DIR", str(tmp_path))
     import trimesh
 
     box = trimesh.creation.box(extents=(1.0, 1.2, 0.8))

@@ -2478,7 +2478,8 @@ def test_cli_outputs_json_payload(tmp_path):
     importlib.util.find_spec("fastapi") is None,
     reason="fastapi is not installed in this interpreter",
 )
-def test_http_process_endpoint_returns_json_payload(tmp_path):
+def test_http_process_endpoint_returns_json_payload(tmp_path, monkeypatch):
+    monkeypatch.setenv("MESH2CAD_STATE_DIR", str(tmp_path))
     mesh = trimesh.creation.box(extents=(10.0, 6.0, 2.0))
     source = tmp_path / "box.stl"
     mesh.export(source)
@@ -2646,7 +2647,8 @@ def test_ui_job_status_endpoint_eventually_completes(tmp_path, monkeypatch):
     importlib.util.find_spec("fastapi") is None,
     reason="fastapi is not installed in this interpreter",
 )
-def test_http_async_process_submission_and_polling(tmp_path):
+def test_http_async_process_submission_and_polling(tmp_path, monkeypatch):
+    monkeypatch.setenv("MESH2CAD_STATE_DIR", str(tmp_path))
     mesh = trimesh.creation.box(extents=(10.0, 6.0, 2.0))
     source = tmp_path / "box.stl"
     mesh.export(source)
@@ -2678,7 +2680,8 @@ def test_http_async_process_submission_and_polling(tmp_path):
     importlib.util.find_spec("fastapi") is None,
     reason="fastapi is not installed in this interpreter",
 )
-def test_http_process_job_cancel_when_still_queued(tmp_path):
+def test_http_process_job_cancel_when_still_queued(tmp_path, monkeypatch):
+    monkeypatch.setenv("MESH2CAD_STATE_DIR", str(tmp_path))
     mesh = trimesh.creation.box(extents=(10.0, 6.0, 2.0))
     source = tmp_path / "box.stl"
     mesh.export(source)
@@ -2707,7 +2710,8 @@ def test_http_process_job_cancel_when_still_queued(tmp_path):
     importlib.util.find_spec("fastapi") is None,
     reason="fastapi is not installed in this interpreter",
 )
-def test_http_async_process_retry_after_completion(tmp_path):
+def test_http_async_process_retry_after_completion(tmp_path, monkeypatch):
+    monkeypatch.setenv("MESH2CAD_STATE_DIR", str(tmp_path))
     mesh = trimesh.creation.box(extents=(10.0, 6.0, 2.0))
     source = tmp_path / "box.stl"
     mesh.export(source)

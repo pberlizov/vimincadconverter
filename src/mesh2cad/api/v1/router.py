@@ -13,6 +13,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from starlette.datastructures import UploadFile
 
 from mesh2cad.api.security import require_api_key
+from mesh2cad.security.server_paths import enforce_paths_under_state_dir
 from mesh2cad.api.service import process_mesh
 from mesh2cad.api.v1.artifacts import (
     ARTIFACT_NAMES,
@@ -166,6 +167,14 @@ async def v1_process(request: Request) -> dict[str, Any]:
             raise HTTPException(status_code=400, detail="Expected JSON body or multipart form.") from exc
         body = ProcessMeshBodyV1.model_validate(raw)
 
+    try:
+        enforce_paths_under_state_dir(
+            input_path=body.resolved_input_path(),
+            output_dir=body.resolved_output_dir() if body.build else None,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     opts = _process_options_from_body(body)
     inp = body.resolved_input_path()
     if not inp.is_file():
@@ -250,6 +259,14 @@ async def v1_submit_job(
         input_path = body.resolved_input_path()
         if not input_path.is_file():
             raise HTTPException(status_code=400, detail=f"Not a file: {input_path}")
+
+    try:
+        enforce_paths_under_state_dir(
+            input_path=body.resolved_input_path(),
+            output_dir=body.resolved_output_dir() if body.build else None,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     try:
         validate_webhook_url(body.webhook_url)

@@ -18,18 +18,20 @@ from mesh2cad.api.v1.router import health_router, router as v1_router
 from mesh2cad.domain.types import ToleranceConfig
 from mesh2cad.jobs.runner import request_job_cancel, retry_job, submit_job
 from mesh2cad.ui.db import create_job_with_id, get_job, get_job_paths
+from mesh2cad.security.server_paths import enforce_paths_under_state_dir
 from mesh2cad.ui.routes import register_ui
 
 
 def create_app():
     """Create an optional FastAPI app if FastAPI is not installed."""
     try:
-        from fastapi import FastAPI, HTTPException
+        from fastapi import Depends, FastAPI, HTTPException
         from starlette.middleware.cors import CORSMiddleware
         from starlette.responses import PlainTextResponse
     except ImportError as exc:  # pragma: no cover
         raise RuntimeError("FastAPI is not installed. Install it to use the HTTP API.") from exc
 
+    from mesh2cad.api.security import require_api_key
     from mesh2cad.observability.access_middleware import AccessLogMiddleware
     from mesh2cad.observability.logging_config import configure_logging
     from mesh2cad.observability.metrics import prometheus_text
@@ -64,10 +66,13 @@ def create_app():
     cors = os.environ.get("MESH2CAD_CORS_ORIGINS", "").strip()
     if cors:
         origins = [o.strip() for o in cors.split(",") if o.strip()]
+        allow_credentials = True
+        if origins == ["*"] or (len(origins) == 1 and origins[0] == "*"):
+            allow_credentials = False
         app.add_middleware(
             CORSMiddleware,
             allow_origins=origins,
-            allow_credentials=True,
+            allow_credentials=allow_credentials,
             allow_methods=["*"],
             allow_headers=["*"],
         )
@@ -83,12 +88,19 @@ def create_app():
 
     if os.environ.get("MESH2CAD_METRICS_ENABLED", "").lower() in {"1", "true", "yes", "on"}:
 
-        @app.get("/metrics")
+        @app.get("/metrics", dependencies=[Depends(require_api_key)])
         def prometheus_metrics():
             return PlainTextResponse(prometheus_text(), media_type="text/plain; version=0.0.4")
 
-    @app.post("/process")
+    @app.post("/process", dependencies=[Depends(require_api_key)])
     def process_endpoint(body: ProcessMeshRequest):
+        try:
+            enforce_paths_under_state_dir(
+                input_path=body.resolved_input_path(),
+                output_dir=body.resolved_output_dir() if body.build else None,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         tc = (
             ToleranceConfig(**body.tolerances.model_dump())
             if body.tolerances is not None
@@ -109,11 +121,18 @@ def create_app():
             icp_hybrid_hull_weight=body.icp_hybrid_hull_weight,
         )
 
-    @app.post("/process/submit")
+    @app.post("/process/submit", dependencies=[Depends(require_api_key)])
     def process_submit(body: ProcessSubmitRequest):
         try:
             validate_webhook_url(body.webhook_url)
         except WebhookUrlRejected as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        try:
+            enforce_paths_under_state_dir(
+                input_path=body.resolved_input_path(),
+                output_dir=body.resolved_output_dir() if body.build else None,
+            )
+        except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         input_path = body.resolved_input_path()
         job_id = uuid.uuid4().hex
@@ -146,7 +165,7 @@ def create_app():
         )
         return {"job_id": job_id, "status": "queued"}
 
-    @app.get("/process/jobs/{job_id}")
+    @app.get("/process/jobs/{job_id}", dependencies=[Depends(require_api_key)])
     def process_job_status(job_id: str):
         job = get_job(job_id)
         if job is None:
@@ -159,7 +178,7 @@ def create_app():
             step_path=job.get("step_path"),
         ).model_dump()
 
-    @app.post("/process/jobs/{job_id}/cancel", response_model=JobCancelResponse)
+    @app.post("/process/jobs/{job_id}/cancel", response_model=JobCancelResponse, dependencies=[Depends(require_api_key)])
     def process_job_cancel(job_id: str):
         detail = request_job_cancel(job_id)
         message = (
@@ -169,7 +188,7 @@ def create_app():
         )
         return JobCancelResponse(job_id=job_id, status=detail["status"], message=message)
 
-    @app.post("/process/jobs/{job_id}/retry", response_model=JobRetryResponse)
+    @app.post("/process/jobs/{job_id}/retry", response_model=JobRetryResponse, dependencies=[Depends(require_api_key)])
     def process_job_retry(job_id: str):
         detail = retry_job(job_id)
         if detail["status"] == "not_found":

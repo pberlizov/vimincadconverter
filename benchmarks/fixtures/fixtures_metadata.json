@@ -1,0 +1,188 @@
+{
+  "fixtures": [
+    {
+      "filename": "noisy_plate.stl",
+      "description": "10×6×2 mm plate with Gaussian vertex jitter simulating scan noise",
+      "source": "synthetic_scan",
+      "scanner_type": "n/a",
+      "noise_level": "light",
+      "intended_test": "Basic scan noise robustness",
+      "expected_features": ["base_extrude"],
+      "difficulty": "easy",
+      "file_size_kb": 12,
+      "approximate_bounds": [10.0, 6.0, 2.0],
+      "created_date": "2026-04-27"
+    },
+    {
+      "filename": "bracket_with_holes.stl",
+      "description": "L-bracket with 3 through-holes and light scan noise",
+      "source": "synthetic_scan",
+      "scanner_type": "structured_light",
+      "noise_level": "light",
+      "intended_test": "Multi-hole inference on prismatic parts",
+      "expected_features": ["base_extrude", "through_hole"],
+      "difficulty": "medium",
+      "file_size_kb": 28,
+      "approximate_bounds": [15.0, 10.0, 8.0],
+      "created_date": "2026-04-27"
+    },
+    {
+      "filename": "spacer_cylinder.stl",
+      "description": "15mm spacer cylinder with chamfered edges",
+      "source": "cad_generated",
+      "scanner_type": "n/a",
+      "noise_level": "none",
+      "intended_test": "Rotational part detection and chamfer handling",
+      "expected_features": ["revolve_solid"],
+      "difficulty": "easy",
+      "file_size_kb": 8,
+      "approximate_bounds": [15.0, 15.0, 25.0],
+      "created_date": "2026-04-27"
+    },
+    {
+      "filename": "tapered_shaft.stl",
+      "description": "Shaft with 15° taper over 50mm length",
+      "source": "cad_generated",
+      "scanner_type": "n/a",
+      "noise_level": "none",
+      "intended_test": "Tapered revolve inference from cone primitives",
+      "expected_features": ["revolve_solid"],
+      "difficulty": "medium",
+      "file_size_kb": 18,
+      "approximate_bounds": [20.0, 20.0, 50.0],
+      "created_date": "2026-04-27"
+    },
+    {
+      "filename": "mounting_flange.stl",
+      "description": "Flange with 6 bolt holes and slight warping",
+      "source": "synthetic_scan",
+      "scanner_type": "laser",
+      "noise_level": "moderate",
+      "intended_test": "Circular pattern detection and warping tolerance",
+      "expected_features": ["base_extrude", "through_hole"],
+      "difficulty": "medium",
+      "file_size_kb": 35,
+      "approximate_bounds": [40.0, 40.0, 8.0],
+      "created_date": "2026-04-27"
+    },
+    {
+      "filename": "pump_housing.stl",
+      "description": "Simplified pump housing with internal cavity",
+      "source": "cad_generated",
+      "scanner_type": "n/a",
+      "noise_level": "none",
+      "intended_test": "Concave feature detection and internal geometry",
+      "expected_features": ["base_extrude", "pocket"],
+      "difficulty": "hard",
+      "file_size_kb": 45,
+      "approximate_bounds": [30.0, 30.0, 20.0],
+      "created_date": "2026-04-27"
+    },
+    {
+      "filename": "control_knob.stl",
+      "description": "Knurled control knob with threaded bore",
+      "source": "synthetic_scan",
+      "scanner_type": "structured_light",
+      "noise_level": "heavy",
+      "intended_test": "Surface texture handling and complex profiles",
+      "expected_features": ["revolve_solid", "through_hole"],
+      "difficulty": "hard",
+      "file_size_kb": 52,
+      "approximate_bounds": [25.0, 25.0, 15.0],
+      "created_date": "2026-04-27"
+    },
+    {
+      "filename": "partial_scan_plate.stl",
+      "description": "Plate with 30% missing data simulating scan occlusion",
+      "source": "synthetic_scan",
+      "scanner_type": "laser",
+      "noise_level": "moderate",
+      "intended_test": "Incomplete data handling and reconstruction",
+      "expected_features": ["base_extrude"],
+      "difficulty": "hard",
+      "file_size_kb": 22,
+      "approximate_bounds": [12.0, 8.0, 2.0],
+      "created_date": "2026-04-27"
+    },
+    {
+      "filename": "thin_wall_bracket.stl",
+      "description": "1mm thickness bracket with deformation",
+      "source": "synthetic_scan",
+      "scanner_type": "photogrammetry",
+      "noise_level": "moderate",
+      "intended_test": "Thin geometry robustness and deformation tolerance",
+      "expected_features": ["base_extrude"],
+      "difficulty": "hard",
+      "file_size_kb": 31,
+      "approximate_bounds": [20.0, 12.0, 1.0],
+      "created_date": "2026-04-27"
+    },
+    {
+      "filename": "bearing_cloud.xyz",
+      "description": "Point cloud from laser scanner of ball bearing",
+      "source": "real_scan",
+      "scanner_type": "laser",
+      "noise_level": "moderate",
+      "intended_test": "Point cloud processing and rotational detection",
+      "expected_features": ["revolve_solid"],
+      "difficulty": "medium",
+      "file_size_kb": 15,
+      "approximate_bounds": [10.0, 10.0, 4.0],
+      "created_date": "2026-04-27"
+    },
+    {
+      "filename": "complex_assembly.pts",
+      "description": "Multiple parts in single point cloud scan",
+      "source": "real_scan",
+      "scanner_type": "structured_light",
+      "noise_level": "heavy",
+      "intended_test": "Multi-body separation and component detection",
+      "expected_features": ["base_extrude"],
+      "difficulty": "hard",
+      "file_size_kb": 38,
+      "approximate_bounds": [25.0, 25.0, 15.0],
+      "created_date": "2026-04-27"
+    },
+    {
+      "filename": "noisy_surface.csv",
+      "description": "Surface scan with outlier points and noise",
+      "source": "synthetic_scan",
+      "scanner_type": "laser",
+      "noise_level": "heavy",
+      "intended_test": "Noise filtering and surface reconstruction",
+      "expected_features": ["base_extrude"],
+      "difficulty": "hard",
+      "file_size_kb": 28,
+      "approximate_bounds": [18.0, 18.0, 3.0],
+      "created_date": "2026-04-27"
+    }
+  ],
+  "metadata": {
+    "version": "2.0",
+    "total_fixtures": 12,
+    "created_date": "2026-04-27",
+    "last_updated": "2026-04-27",
+    "categories": {
+      "basic_mechanical": 4,
+      "complex_geometries": 4,
+      "challenging_cases": 4,
+      "point_clouds": 3
+    },
+    "difficulty_distribution": {
+      "easy": 2,
+      "medium": 4,
+      "hard": 6
+    },
+    "source_distribution": {
+      "real_scan": 2,
+      "synthetic_scan": 7,
+      "cad_generated": 3
+    },
+    "file_size_stats": {
+      "min_kb": 8,
+      "max_kb": 52,
+      "average_kb": 28.5,
+      "total_kb": 342
+    }
+  }
+}
