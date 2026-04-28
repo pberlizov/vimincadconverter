@@ -23,6 +23,7 @@ class PrimitiveKind(str, Enum):
 
 class FeatureKind(str, Enum):
     BASE_EXTRUDE = "base_extrude"
+    HOLE_STACK = "hole_stack"
     THROUGH_HOLE = "through_hole"
     COUNTERSINK_HOLE = "countersink_hole"
     BLIND_HOLE = "blind_hole"
@@ -32,6 +33,16 @@ class FeatureKind(str, Enum):
     POCKET = "pocket"
     REVOLVE = "revolve"
     FILLET_CANDIDATE = "fillet_candidate"
+
+
+class HoleSectionKind(str, Enum):
+    CYLINDER = "cylinder"
+    CONE = "cone"
+
+
+class HoleTermination(str, Enum):
+    THROUGH = "through"
+    BLIND = "blind"
 
 
 @dataclass(slots=True)

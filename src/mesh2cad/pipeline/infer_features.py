@@ -12,6 +12,8 @@ from mesh2cad.domain.features import (
     BossFeature,
     CounterSinkHoleFeature,
     Feature,
+    HoleSection,
+    HoleStackFeature,
     PocketFeature,
     SphericalBossFeature,
     SphericalCavityFeature,
@@ -23,7 +25,13 @@ _THROUGH_CYLINDER_MIN_DEPTH_RATIO = 0.78
 _BLIND_CYLINDER_MAX_DEPTH_RATIO = 0.58
 _BLIND_CYLINDER_MIN_DEPTH_RATIO = 0.20
 from mesh2cad.domain.primitives import ConePrimitive, CylinderPrimitive, PlanePrimitive, Primitive, SpherePrimitive
-from mesh2cad.domain.types import Confidence, FeatureKind, ToleranceConfig
+from mesh2cad.domain.types import (
+    Confidence,
+    FeatureKind,
+    HoleSectionKind,
+    HoleTermination,
+    ToleranceConfig,
+)
 from mesh2cad.mesh.analysis import SceneAnalysis
 from mesh2cad.mesh.sampling import SampledCloud
 
@@ -111,6 +119,16 @@ def infer_features(
     if blind_holes:
         features.extend(blind_holes)
 
+    hole_stacks = _compose_hole_stacks(
+        base_extrude=base_extrude,
+        through_holes=through_holes,
+        countersink_holes=countersink_holes,
+        blind_holes=blind_holes,
+        tolerances=tolerances,
+    )
+    if hole_stacks:
+        features.extend(hole_stacks)
+
     reserved_centers = [(h.center_xy, h.radius) for h in remaining_through_holes] + [
         (h.center_xy, h.radius) for h in blind_holes
     ]
@@ -143,6 +161,238 @@ def infer_features(
         features.extend(pockets)
 
     return FeatureInferenceResult(features=features, warnings=warnings)
+
+
+def _compose_hole_stacks(
+    *,
+    base_extrude: BaseExtrudeFeature,
+    through_holes: list[ThroughHoleFeature],
+    countersink_holes: list[CounterSinkHoleFeature],
+    blind_holes: list[BlindHoleFeature],
+    tolerances: ToleranceConfig,
+) -> list[HoleStackFeature]:
+    stacks: list[HoleStackFeature] = []
+    consumed_through_indices: set[int] = set()
+    depth = float(base_extrude.depth)
+    z_dir = np.asarray(base_extrude.sketch_plane["z_dir"], dtype=np.float64)
+
+    for countersink in countersink_holes:
+        match_index, match = _find_matching_through_hole(
+            countersink=countersink,
+            through_holes=through_holes,
+            tolerances=tolerances,
+        )
+        if match is not None and match_index is not None:
+            consumed_through_indices.add(match_index)
+
+        axis_direction = np.asarray(countersink.axis_direction, dtype=np.float64)
+        axis_alignment = abs(float(np.dot(axis_direction, z_dir)))
+        axis_alignment = max(axis_alignment, 1e-6)
+        through_depth = float(match.depth) if match is not None and match.depth is not None else depth / axis_alignment
+        cone_depth = _countersink_depth(
+            hole_radius=float(countersink.hole_radius),
+            sink_radius=float(countersink.counter_sink_radius),
+            sink_angle_deg=float(countersink.counter_sink_angle_deg),
+        )
+        cone_depth = min(cone_depth, max(through_depth - max(tolerances.linear * 2.0, countersink.hole_radius), 0.0))
+        if cone_depth <= tolerances.linear:
+            continue
+
+        sections = [
+            HoleSection(
+                kind=HoleSectionKind.CONE,
+                start_offset=0.0,
+                end_offset=float(cone_depth),
+                start_radius=float(countersink.counter_sink_radius),
+                end_radius=float(countersink.hole_radius),
+            ),
+            HoleSection(
+                kind=HoleSectionKind.CYLINDER,
+                start_offset=float(cone_depth),
+                end_offset=float(through_depth),
+                start_radius=float(countersink.hole_radius),
+                end_radius=float(countersink.hole_radius),
+            ),
+        ]
+        confidence_score = countersink.confidence.score
+        if match is not None:
+            confidence_score = max(confidence_score, match.confidence.score)
+        stacks.append(
+            HoleStackFeature(
+                kind=FeatureKind.HOLE_STACK,
+                confidence=Confidence(
+                    score=min(1.0, confidence_score * 0.92 + 0.05),
+                    reasons=[
+                        "coaxial countersink and hole composed into one stack",
+                        f"{len(sections)} axial sections",
+                    ],
+                ),
+                parameters={
+                    "center_xy": countersink.center_xy,
+                    "total_depth": through_depth,
+                    "termination": HoleTermination.THROUGH.value,
+                    "start_from_top": bool(countersink.start_from_top),
+                    "sections": [
+                        {
+                            "kind": section.kind.value,
+                            "start_offset": section.start_offset,
+                            "end_offset": section.end_offset,
+                            "start_radius": section.start_radius,
+                            "end_radius": section.end_radius,
+                        }
+                        for section in sections
+                    ],
+                },
+                references={},
+                center_xy=countersink.center_xy,
+                axis_origin=countersink.axis_origin,
+                axis_direction=countersink.axis_direction,
+                start_from_top=bool(countersink.start_from_top),
+                total_depth=float(through_depth),
+                termination=HoleTermination.THROUGH,
+                sections=sections,
+            )
+        )
+
+    for index, hole in enumerate(through_holes):
+        if index in consumed_through_indices:
+            continue
+        hole_depth = float(hole.depth) if hole.depth is not None else depth
+        sections = [
+            HoleSection(
+                kind=HoleSectionKind.CYLINDER,
+                start_offset=0.0,
+                end_offset=hole_depth,
+                start_radius=float(hole.radius),
+                end_radius=float(hole.radius),
+            )
+        ]
+        stacks.append(
+            HoleStackFeature(
+                kind=FeatureKind.HOLE_STACK,
+                confidence=Confidence(
+                    score=min(1.0, hole.confidence.score * 0.94 + 0.03),
+                    reasons=["through-hole represented as a structured axial stack"],
+                ),
+                parameters={
+                    "center_xy": hole.center_xy,
+                    "total_depth": hole_depth,
+                    "termination": HoleTermination.THROUGH.value,
+                    "start_from_top": True,
+                    "sections": [
+                        {
+                            "kind": HoleSectionKind.CYLINDER.value,
+                            "start_offset": 0.0,
+                            "end_offset": hole_depth,
+                            "start_radius": hole.radius,
+                            "end_radius": hole.radius,
+                        }
+                    ],
+                },
+                references={},
+                center_xy=hole.center_xy,
+                axis_origin=hole.axis_origin,
+                axis_direction=hole.axis_direction,
+                start_from_top=True,
+                total_depth=hole_depth,
+                termination=HoleTermination.THROUGH,
+                sections=sections,
+            )
+        )
+
+    for blind_hole in blind_holes:
+        sections = [
+            HoleSection(
+                kind=HoleSectionKind.CYLINDER,
+                start_offset=0.0,
+                end_offset=float(blind_hole.hole_depth),
+                start_radius=float(blind_hole.radius),
+                end_radius=float(blind_hole.radius),
+            )
+        ]
+        start_from_top = _blind_hole_starts_from_top(
+            blind_hole=blind_hole,
+            base_extrude=base_extrude,
+        )
+        stacks.append(
+            HoleStackFeature(
+                kind=FeatureKind.HOLE_STACK,
+                confidence=Confidence(
+                    score=min(1.0, blind_hole.confidence.score * 0.94 + 0.03),
+                    reasons=["blind-hole represented as a structured axial stack"],
+                ),
+                parameters={
+                    "center_xy": blind_hole.center_xy,
+                    "total_depth": float(blind_hole.hole_depth),
+                    "termination": HoleTermination.BLIND.value,
+                    "start_from_top": start_from_top,
+                    "sections": [
+                        {
+                            "kind": HoleSectionKind.CYLINDER.value,
+                            "start_offset": 0.0,
+                            "end_offset": float(blind_hole.hole_depth),
+                            "start_radius": blind_hole.radius,
+                            "end_radius": blind_hole.radius,
+                        }
+                    ],
+                },
+                references={},
+                center_xy=blind_hole.center_xy,
+                axis_origin=blind_hole.axis_origin,
+                axis_direction=blind_hole.axis_direction,
+                start_from_top=start_from_top,
+                total_depth=float(blind_hole.hole_depth),
+                termination=HoleTermination.BLIND,
+                sections=sections,
+            )
+        )
+
+    return _deduplicate_hole_stacks(stacks, tolerances)
+
+
+def _find_matching_through_hole(
+    *,
+    countersink: CounterSinkHoleFeature,
+    through_holes: list[ThroughHoleFeature],
+    tolerances: ToleranceConfig,
+) -> tuple[int | None, ThroughHoleFeature | None]:
+    for index, hole in enumerate(through_holes):
+        center_delta = math.dist(countersink.center_xy, hole.center_xy)
+        radius_delta = abs(countersink.hole_radius - hole.radius)
+        axis_alignment = abs(
+            float(
+                np.dot(
+                    np.asarray(countersink.axis_direction, dtype=np.float64),
+                    np.asarray(hole.axis_direction, dtype=np.float64),
+                )
+            )
+        )
+        if (
+            center_delta <= max(tolerances.linear * 3.0, hole.radius * 0.3)
+            and radius_delta <= max(tolerances.linear * 2.0, hole.radius * 0.12)
+            and axis_alignment >= math.cos(math.radians(tolerances.angular_deg * 2.5))
+        ):
+            return index, hole
+    return None, None
+
+
+def _countersink_depth(*, hole_radius: float, sink_radius: float, sink_angle_deg: float) -> float:
+    half_angle = math.radians(max(sink_angle_deg, 1e-3) / 2.0)
+    taper = math.tan(half_angle)
+    if taper <= 1e-9:
+        return 0.0
+    return max(0.0, (sink_radius - hole_radius) / taper)
+
+
+def _blind_hole_starts_from_top(
+    *,
+    blind_hole: BlindHoleFeature,
+    base_extrude: BaseExtrudeFeature,
+) -> bool:
+    origin = np.asarray(base_extrude.sketch_plane["origin"], dtype=np.float64)
+    z_dir = np.asarray(base_extrude.sketch_plane["z_dir"], dtype=np.float64)
+    axial_offset = float(np.dot(np.asarray(blind_hole.axis_origin, dtype=np.float64) - origin, z_dir))
+    return axial_offset >= (float(base_extrude.depth) * 0.5)
 
 
 def _infer_spherical_modifiers(
@@ -425,6 +675,7 @@ def _infer_through_holes(
     basis_y = np.asarray(base_extrude.sketch_plane["y_dir"], dtype=np.float64)
     origin = np.asarray(base_extrude.sketch_plane["origin"], dtype=np.float64)
     profile_loop = base_extrude.profile_loops[0]
+    outer_profile_loop = _outer_profile_envelope(profile_loop)
 
     holes: list[ThroughHoleFeature] = []
     for cylinder in cylinder_primitives:
@@ -482,6 +733,16 @@ def _infer_through_holes(
             radius=cylinder.radius,
             profile_loop=profile_loop,
             tolerances=tolerances,
+        ) and not _hole_fits_profile(
+            center_xy=entry_xy,
+            radius=cylinder.radius,
+            profile_loop=outer_profile_loop,
+            tolerances=tolerances,
+        ) and not _hole_fits_profile(
+            center_xy=exit_xy,
+            radius=cylinder.radius,
+            profile_loop=outer_profile_loop,
+            tolerances=tolerances,
         ):
             continue
 
@@ -535,6 +796,7 @@ def _infer_blind_holes(
     basis_y = np.asarray(base_extrude.sketch_plane["y_dir"], dtype=np.float64)
     origin = np.asarray(base_extrude.sketch_plane["origin"], dtype=np.float64)
     profile_loop = base_extrude.profile_loops[0]
+    outer_profile_loop = _outer_profile_envelope(profile_loop)
     depth = float(base_extrude.depth)
 
     blinds: list[BlindHoleFeature] = []
@@ -564,6 +826,11 @@ def _infer_blind_holes(
             center_xy=center_xy,
             radius=cylinder.radius,
             profile_loop=profile_loop,
+            tolerances=tolerances,
+        ) and not _hole_fits_profile(
+            center_xy=center_xy,
+            radius=cylinder.radius,
+            profile_loop=outer_profile_loop,
             tolerances=tolerances,
         ):
             continue
@@ -865,6 +1132,15 @@ def _convex_profile_loop(points_2d: np.ndarray) -> list[tuple[float, float]]:
     hull = ConvexHull(points_2d)
     hull_points = points_2d[hull.vertices]
     return [(float(point[0]), float(point[1])) for point in hull_points]
+
+
+def _outer_profile_envelope(profile_loop: list[tuple[float, float]]) -> list[tuple[float, float]]:
+    if len(profile_loop) < 3:
+        return profile_loop
+    try:
+        return _convex_profile_loop(np.asarray(profile_loop, dtype=np.float64))
+    except Exception:
+        return profile_loop
 
 
 def _concave_profile_loop(
@@ -1257,6 +1533,81 @@ def _deduplicate_countersinks(
         if not duplicate:
             deduplicated.append(countersink)
     return deduplicated
+
+
+def _deduplicate_hole_stacks(
+    stacks: list[HoleStackFeature],
+    tolerances: ToleranceConfig,
+) -> list[HoleStackFeature]:
+    deduplicated: list[HoleStackFeature] = []
+    for stack in sorted(
+        stacks,
+        key=lambda item: (
+            item.center_xy[0],
+            item.center_xy[1],
+            item.total_depth,
+            len(item.sections),
+        ),
+    ):
+        duplicate = False
+        for existing in deduplicated:
+            center_delta = math.dist(stack.center_xy, existing.center_xy)
+            depth_delta = abs(stack.total_depth - existing.total_depth)
+            axis_alignment = abs(
+                float(
+                    np.dot(
+                        np.asarray(stack.axis_direction, dtype=np.float64),
+                        np.asarray(existing.axis_direction, dtype=np.float64),
+                    )
+                )
+            )
+            if center_delta > max(tolerances.linear * 2.0, _stack_min_radius(stack) * 0.2):
+                continue
+            if depth_delta > max(tolerances.linear * 2.0, stack.total_depth * 0.12):
+                continue
+            if axis_alignment < math.cos(math.radians(tolerances.angular_deg * 2.5)):
+                continue
+            if not _stack_sections_match(stack.sections, existing.sections, tolerances):
+                continue
+            duplicate = True
+            break
+        if not duplicate:
+            deduplicated.append(stack)
+    return deduplicated
+
+
+def _stack_min_radius(stack: HoleStackFeature) -> float:
+    radii = [section.start_radius for section in stack.sections] + [section.end_radius for section in stack.sections]
+    return max(min(radii, default=0.0), 1e-9)
+
+
+def _stack_sections_match(
+    left: list[HoleSection],
+    right: list[HoleSection],
+    tolerances: ToleranceConfig,
+) -> bool:
+    if len(left) != len(right):
+        return False
+    for left_section, right_section in zip(left, right, strict=False):
+        if left_section.kind != right_section.kind:
+            return False
+        if abs(left_section.start_offset - right_section.start_offset) > tolerances.linear * 2.0:
+            return False
+        if abs(left_section.end_offset - right_section.end_offset) > tolerances.linear * 2.0:
+            return False
+        if abs(left_section.start_radius - right_section.start_radius) > max(
+            tolerances.linear * 2.0,
+            left_section.start_radius * 0.15,
+            right_section.start_radius * 0.15,
+        ):
+            return False
+        if abs(left_section.end_radius - right_section.end_radius) > max(
+            tolerances.linear * 2.0,
+            left_section.end_radius * 0.15,
+            right_section.end_radius * 0.15,
+        ):
+            return False
+    return True
 
 
 def _deduplicate_spherical_bosses(

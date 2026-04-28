@@ -234,12 +234,27 @@ Legend:
 - [x] Through-hole inference exists.
   Verification:
   - Verified by synthetic plate-with-hole feature test.
+- [x] Countersink inference exists.
+  Verification:
+  - Verified by cone-and-cylinder feature-inference tests and generated script coverage.
+- [x] Blind-hole inference exists.
+  Verification:
+  - Verified by synthetic blind-hole feature tests, including angled-axis coverage.
 - [x] Boss inference exists.
   Verification:
   - Verified by synthetic protrusion feature-inference test and boss script-generation test.
 - [x] Pocket inference exists.
   Verification:
   - Verified by synthetic planar-pocket feature-inference test and build-enabled pocket script test.
+- [x] Spherical boss inference exists.
+  Verification:
+  - Verified by synthetic sphere-backed protrusion inference test and generated script coverage.
+- [x] Spherical cavity inference exists.
+  Verification:
+  - Verified by synthetic sphere-backed cavity inference test and generated script coverage.
+- [x] Simple revolve inference exists.
+  Verification:
+  - Verified by revolve inference tests and generated revolve script coverage.
 
 ## CAD Synthesis Objectives
 
@@ -258,6 +273,27 @@ Legend:
 - [x] Reconstruction metadata report exists.
   Verification:
   - Verified in synthesis wrapper test metadata assertions.
+- [x] Preview STL export exists.
+  Verification:
+  - Verified by Python 3.11 build-enabled tests that write a non-empty preview STL.
+- [x] Countersink CAD synthesis exists.
+  Verification:
+  - Verified by generated script assertions and build-enabled countersink tests.
+- [x] Blind-hole CAD synthesis exists.
+  Verification:
+  - Verified by generated script assertions and build-enabled blind-hole tests.
+- [x] Pocket CAD synthesis exists.
+  Verification:
+  - Verified by generated script assertions and build-enabled pocket tests.
+- [x] Boss CAD synthesis exists.
+  Verification:
+  - Verified by generated script assertions and build-enabled boss tests.
+- [x] Spherical boss/cavity CAD synthesis exists.
+  Verification:
+  - Verified by generated script assertions for additive and subtractive sphere operations.
+- [x] Revolve CAD synthesis exists.
+  Verification:
+  - Verified by revolve script-generation tests.
 
 ## Orchestration Objectives
 
@@ -438,6 +474,48 @@ Legend:
 - [x] Add STEP export.
   Verification:
   - Verified by Python 3.11 tests that write a non-empty `model.step`.
+
+## Breadth Expansion Queue
+
+These are the next broadening moves that increase the product's addressable mechanical surface area rather than only polishing existing single-feature routes.
+
+- [ ] Hole-stack abstraction exists.
+  Verification:
+  - Inspect the feature/domain model for a structured axial hole representation.
+  - Verify by tests that represent at least two stacked-section hole cases with one shared axis.
+- [ ] Counterbore inference exists.
+  Verification:
+  - Add feature-inference tests for coaxial stepped cylindrical bores from one entry face.
+  - Verify generated CAD script output includes the stepped-bore reconstruction.
+- [ ] Tapered blind-hole inference exists.
+  Verification:
+  - Add cone-plus-cylinder feature tests that emit a tapered blind-hole or equivalent structured hole stack.
+- [ ] Tapered boss inference exists.
+  Verification:
+  - Add cone-backed protrusion tests and verify generated additive CAD output.
+- [ ] Multi-face prismatic reconstruction exists.
+  Verification:
+  - Add at least one benchmark or smoke test where features live on more than one dominant stock face.
+  - Verify generated CAD output does not collapse the part to a single-face-only modifier model.
+- [ ] Multi-stock / additive prismatic sequencing exists.
+  Verification:
+  - Add tests for an L-bracket-like or gusseted part that requires more than one additive stock feature.
+- [ ] Counterbore plus countersink coexistence on one axis is supported.
+  Verification:
+  - Add a structured hole-stack test with multiple entry modifiers on one shared axis.
+- [ ] Point-cloud-native benchmark cases exist.
+  Verification:
+  - Add benchmark or smoke cases that start from dense point inputs rather than meshes.
+  - Verify the pipeline produces structured features, not only route classification.
+- [ ] Multi-body selection or splitting exists.
+  Verification:
+  - Add tests for disconnected input bodies and verify body discovery, reporting, or selection behavior.
+- [ ] Rotational route supports tapered profiles from cone primitives.
+  Verification:
+  - Add tests that infer a tapered revolve-capable profile from cone-dominant rotational input.
+- [ ] Real-part fixture pack exists.
+  Verification:
+  - Add a small curated fixture set of ugly real meshes or point clouds with expected routes and minimum feature counts.
 
 ## End-of-Step Physical Audit Template
 
@@ -1450,3 +1528,24 @@ Legend:
 - Gaps still not physically present:
   - There is still no external queue or supervisor.
   - Cone and sphere primitives are still not consumed by downstream feature inference.
+
+## Step Audit 2026-04-27 F
+
+- Files added this step:
+  - None.
+- Files modified this step:
+  - `tracker.md`
+- Commands run this step:
+  - `sed -n '1,260p' README.md`
+  - `sed -n '340,520p' tracker.md`
+  - `tail -n 120 tracker.md`
+  - `rg -n "FeatureKind|class .*Feature|def infer_|supported|roadmap|Next|TODO|unchecked|\\[ \\]" src tests docs README.md tracker.md`
+- Tests passed this step:
+  - None; this step was tracker reconciliation and backlog shaping only.
+- Behaviors now physically present:
+  - The tracker now reflects the broader feature surface already present in the repository, including countersinks, blind holes, spherical modifiers, revolve support, and richer CAD synthesis coverage.
+  - The tracker now contains a concrete breadth-expansion queue focused on new mechanical workflows rather than only incremental polishing.
+  - The next-wave product backlog is now organized around hole stacks, counterbores, tapered features, multi-face prismatic parts, multi-body handling, point-cloud-native coverage, and broader rotational workflows.
+- Gaps still not physically present:
+  - The new breadth-expansion items remain backlog items and are not implemented yet.
+  - There is still no external queue or supervisor.

@@ -18,6 +18,8 @@ from mesh2cad.domain.features import (
     BlindHoleFeature,
     BossFeature,
     CounterSinkHoleFeature,
+    HoleSection,
+    HoleStackFeature,
     PocketFeature,
     RevolveSolidFeature,
     SphericalBossFeature,
@@ -25,7 +27,14 @@ from mesh2cad.domain.features import (
     ThroughHoleFeature,
 )
 from mesh2cad.domain.primitives import ConePrimitive, CylinderPrimitive, PlanePrimitive, PrimitiveRegion, SpherePrimitive
-from mesh2cad.domain.types import Confidence, FeatureKind, PrimitiveKind, ToleranceConfig
+from mesh2cad.domain.types import (
+    Confidence,
+    FeatureKind,
+    HoleSectionKind,
+    HoleTermination,
+    PrimitiveKind,
+    ToleranceConfig,
+)
 from mesh2cad.mesh.analysis import analyze_scene
 from mesh2cad.mesh.cleanup import repair_mesh
 from mesh2cad.mesh.io import load_mesh
@@ -806,6 +815,16 @@ def test_infer_features_detects_countersink_hole_from_cone_and_hole():
     assert countersinks[0].counter_sink_radius == pytest.approx(2.0, abs=0.15)
     assert countersinks[0].start_from_top is False
 
+    hole_stacks = [feature for feature in result.features if isinstance(feature, HoleStackFeature)]
+    assert len(hole_stacks) == 1
+    assert hole_stacks[0].termination == HoleTermination.THROUGH
+    assert [section.kind for section in hole_stacks[0].sections] == [
+        HoleSectionKind.CONE,
+        HoleSectionKind.CYLINDER,
+    ]
+    assert hole_stacks[0].sections[0].start_radius == pytest.approx(2.0, abs=0.15)
+    assert hole_stacks[0].sections[1].start_radius == pytest.approx(1.0, abs=0.01)
+
 
 def test_infer_features_detects_spherical_boss():
     top_points = np.array(
@@ -1240,6 +1259,108 @@ def test_generate_build123d_script_supports_countersinks():
     assert "COUNTERSINK_HOLES = [" in script
     assert "CounterSinkHole(radius=hole_radius, counter_sink_radius=sink_radius, depth=None, counter_sink_angle=sink_angle, mode=Mode.SUBTRACT)" in script
     assert "with Locations(sink_plane):" in script
+
+
+def test_generate_build123d_script_supports_countersink_hole_stack():
+    base_feature = BaseExtrudeFeature(
+        kind=FeatureKind.BASE_EXTRUDE,
+        confidence=Confidence(score=0.95, reasons=[]),
+        parameters={"depth": 4.0},
+        references={},
+        profile_loops=[[(-5.0, -3.0), (5.0, -3.0), (5.0, 3.0), (-5.0, 3.0)]],
+        depth=4.0,
+        sketch_plane={
+            "origin": (0.0, 0.0, 0.0),
+            "x_dir": (1.0, 0.0, 0.0),
+            "y_dir": (0.0, 1.0, 0.0),
+            "z_dir": (0.0, 0.0, 1.0),
+        },
+    )
+    hole_stack = HoleStackFeature(
+        kind=FeatureKind.HOLE_STACK,
+        confidence=Confidence(score=0.9, reasons=[]),
+        parameters={},
+        references={},
+        center_xy=(0.0, 0.0),
+        axis_origin=(0.0, 0.0, 0.0),
+        axis_direction=(0.0, 0.0, 1.0),
+        start_from_top=False,
+        total_depth=4.0,
+        termination=HoleTermination.THROUGH,
+        sections=[
+            HoleSection(
+                kind=HoleSectionKind.CONE,
+                start_offset=0.0,
+                end_offset=1.0,
+                start_radius=2.0,
+                end_radius=1.0,
+            ),
+            HoleSection(
+                kind=HoleSectionKind.CYLINDER,
+                start_offset=1.0,
+                end_offset=4.0,
+                start_radius=1.0,
+                end_radius=1.0,
+            ),
+        ],
+    )
+
+    script = generate_script([base_feature, hole_stack])
+
+    assert "COUNTERSINK_HOLES = [" in script
+    assert "COUNTERBORE_HOLES = []" in script
+    assert "CounterSinkHole(radius=hole_radius, counter_sink_radius=sink_radius, depth=None, counter_sink_angle=sink_angle, mode=Mode.SUBTRACT)" in script
+
+
+def test_generate_build123d_script_supports_counterbore_hole_stack():
+    base_feature = BaseExtrudeFeature(
+        kind=FeatureKind.BASE_EXTRUDE,
+        confidence=Confidence(score=0.95, reasons=[]),
+        parameters={"depth": 5.0},
+        references={},
+        profile_loops=[[(-5.0, -3.0), (5.0, -3.0), (5.0, 3.0), (-5.0, 3.0)]],
+        depth=5.0,
+        sketch_plane={
+            "origin": (0.0, 0.0, 0.0),
+            "x_dir": (1.0, 0.0, 0.0),
+            "y_dir": (0.0, 1.0, 0.0),
+            "z_dir": (0.0, 0.0, 1.0),
+        },
+    )
+    hole_stack = HoleStackFeature(
+        kind=FeatureKind.HOLE_STACK,
+        confidence=Confidence(score=0.9, reasons=[]),
+        parameters={},
+        references={},
+        center_xy=(0.5, -0.5),
+        axis_origin=(0.0, 0.0, 0.0),
+        axis_direction=(0.0, 0.0, 1.0),
+        start_from_top=True,
+        total_depth=5.0,
+        termination=HoleTermination.BLIND,
+        sections=[
+            HoleSection(
+                kind=HoleSectionKind.CYLINDER,
+                start_offset=0.0,
+                end_offset=1.5,
+                start_radius=1.8,
+                end_radius=1.8,
+            ),
+            HoleSection(
+                kind=HoleSectionKind.CYLINDER,
+                start_offset=1.5,
+                end_offset=5.0,
+                start_radius=0.9,
+                end_radius=0.9,
+            ),
+        ],
+    )
+
+    script = generate_script([base_feature, hole_stack])
+
+    assert "COUNTERBORE_HOLES = [" in script
+    assert "(0.500000, -0.500000, 0.900000, 1.800000, 1.500000, True, 5.000000)" in script
+    assert "CounterBoreHole(radius=hole_radius, counter_bore_radius=bore_radius, counter_bore_depth=bore_depth, depth=total_depth, mode=Mode.SUBTRACT)" in script
 
 
 def test_generate_build123d_script_supports_angled_countersink():
