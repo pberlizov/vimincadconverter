@@ -19,5 +19,5 @@ def test_benchmark_cases_meet_expectations(tmp_path, case: dict):
         pytest.skip("Catalog case with build_export requires build123d")
     if case.get("generator") == "build123d_two_hole_plate" and importlib.util.find_spec("build123d") is None:
         pytest.skip("Catalog case build123d_two_hole_plate requires build123d")
-    result = run_case(case, tmp_dir=tmp_path, auto_tune=False)
+    result = run_case(case, tmp_dir=tmp_path)
     assert_case_expectations(case, result)

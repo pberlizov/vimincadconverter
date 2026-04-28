@@ -96,7 +96,7 @@ def _make_mesh(case: dict[str, Any]) -> trimesh.Trimesh:
     raise ValueError(f"Unknown generator: {generator!r}")
 
 
-def run_case(case: dict[str, Any], *, tmp_dir: Path, auto_tune: bool = False) -> PipelineResult:
+def run_case(case: dict[str, Any], *, tmp_dir: Path, auto_tune: bool = True) -> PipelineResult:
     path = _make_input_mesh_path(case, tmp_dir)
     output_dir = None
     if case.get("build_export"):
