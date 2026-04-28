@@ -33,6 +33,8 @@ We treat **deeper current routes** (cleaner sketches, holes, frames, validation)
 
 ## Install
 
+From a clone of this repository:
+
 ```bash
 pip install -e .
 # CLI + numpy stack only
@@ -40,48 +42,121 @@ pip install -e .
 pip install -e ".[dev]"        # pytest
 pip install -e ".[api]"       # FastAPI + uvicorn + pydantic
 pip install -e ".[full]"      # adds build123d, open3d, gradio, …
-pip install -e ".[queue]"     # optional: redis + rq for future durable workers
+pip install -e ".[queue]"     # optional: redis + rq for Redis-backed job workers
 pip install -e ".[open3d]"    # optional: Open3d for MESH2CAD_USE_OPEN3D_METRICS (also in [full])
 pip install -e ".[cad]"       # optional: build123d only (Dockerfile.full / in-container STEP export)
 ```
 
 Requires **Python ≥ 3.11**.
 
-## CLI
+## Usage
+
+### Command-line (`mesh2cad`)
+
+Typical flows:
 
 ```bash
-mesh2cad input.stl --output-dir ./out
-mesh2cad input.stl --no-build --sample-count 8000
-mesh2cad input.stl --no-auto-tune   # use exact requested sample count
-mesh2cad cloud.xyz --no-build --icp-iterations 15   # point cloud input; validation ICP knobs
+# Mesh → report + build123d script + optional STEP/STL when build123d is installed
+mesh2cad part.stl --output-dir ./out
+
+# Script and metrics only (no CAD execution)
+mesh2cad part.stl --no-build --sample-count 8000
+
+# Fixed sample count (disable automatic sample tuning)
+mesh2cad part.stl --no-auto-tune
+
+# Point cloud input; optional ICP tuning for validation
+mesh2cad cloud.xyz --no-build --icp-iterations 15
 ```
 
-## HTTP API & UI
+Outputs under `--output-dir` include the structured report and generated Python; with **`build123d`** installed and build enabled, you also get STEP/preview STL when the pipeline succeeds.
+
+### HTTP API (`mesh2cad-api`)
 
 ```bash
-mesh2cad-api   # http://127.0.0.1:8000 (set MESH2CAD_BIND_HOST / MESH2CAD_BIND_PORT for containers)
-mesh2cad-ui    # Gradio panel (http://127.0.0.1:7860): path or file upload, JSON + downloads (report / script / STEP / preview STL); temp work under $TMPDIR or MESH2CAD_STATE_DIR
+export MESH2CAD_STATE_DIR=/var/lib/mesh2cad   # required for uploads and job storage
+mesh2cad-api   # default http://127.0.0.1:8000 — use MESH2CAD_BIND_HOST=0.0.0.0 in containers
 ```
 
-- **`/v1` (recommended for integrations)** — OpenAPI `/docs` lists full schemas. Summary:
-  - `GET /health`, `GET /ready` — unauthenticated probes (`ready` checks SQLite + state dir; with **`MESH2CAD_JOB_BACKEND=rq`** it also pings **Redis**).
-  - `POST /v1/process` — synchronous run; **JSON** (`ProcessMeshBodyV1`: `input_path`, `build`, `include_script`, `tolerances`, `icp_hybrid_hull_weight`, …) or **`multipart/form-data`** with field `file` (STL/OBJ/PLY/xyz/pts/csv/npy) plus optional form fields mirroring the JSON keys.
-  - `POST /v1/jobs` — async job; same JSON or multipart; optional header **`Idempotency-Key`**; optional JSON field **`webhook_url`** (terminal-state POST; HMAC header **`X-Mesh2cad-Signature`** when `MESH2CAD_WEBHOOK_SECRET` is set).
-  - `GET /v1/jobs/{job_id}` — status + payload.
-  - `GET /v1/jobs/{job_id}/artifacts/{name}` — download `report`, `script`, `step`, `preview`, or `input` (authenticated when API keys are configured).
-  - `GET /v1/jobs/{job_id}/events` — SSE stream of `{ "status": ... }` until terminal.
-  - `POST /v1/jobs/{job_id}/cancel` · `POST /v1/jobs/{job_id}/retry` — same semantics as legacy routes below.
-  - When **`MESH2CAD_API_KEYS`** is set (comma-separated), v1 routes require **`X-API-Key`** or **`Authorization: Bearer <key>`**. If unset, v1 remains open (development only).
-  - **`MESH2CAD_CORS_ORIGINS`** — comma-separated list to enable CORS for browser clients.
-- **Legacy (unchanged)** — `POST /process` (sync JSON, extended with `include_script`, `tolerances`, `icp_hybrid_hull_weight`), `POST /process/submit` (optional `webhook_url`), `GET /process/jobs/{job_id}`, cancel/retry — no API key layer.
+- **Interactive docs:** `http://<host>:8000/docs` (OpenAPI).
+- **Health:** `GET /health` (process up), `GET /ready` (SQLite + state dir writable; with **`MESH2CAD_JOB_BACKEND=rq`** also checks **Redis**).
 
-Browser UI: setup admin user, sign in, upload mesh, download report/script/STEP, see **structured failure** blocks when jobs fail.
+**Synchronous** upload + process (`multipart/form-data`, field `file`):
 
-## Security and privacy
+```bash
+curl -sS -X POST "http://127.0.0.1:8000/v1/process" \
+  -H "X-API-Key: YOUR_KEY" \
+  -F "file=@./part.stl" \
+  -F "build=true" \
+  -F "include_script=true"
+```
 
-- Processing is **local** by default; this repo does not embed calls to paid third-party “AI mesh” APIs.
-- **Do not commit** real API keys, tokens, or production passwords (`.env` is gitignored). Automated tests use **dummy** credentials only; change defaults for real deployments.
-- If a secret is ever pasted into chat, a ticket, or a commit, **revoke and rotate** it immediately—assume it is compromised.
+Omit **`X-API-Key`** when **`MESH2CAD_API_KEYS`** is not configured (local development only).
+
+**Asynchronous** job (same form fields as `/v1/process`; poll `GET /v1/jobs/{id}` or subscribe to `GET /v1/jobs/{id}/events`):
+
+```bash
+curl -sS -X POST "http://127.0.0.1:8000/v1/jobs" \
+  -H "X-API-Key: YOUR_KEY" \
+  -H "Idempotency-Key: unique-string" \
+  -F "file=@./part.stl"
+```
+
+When **`MESH2CAD_API_KEYS`** is set, send **`X-API-Key`** or **`Authorization: Bearer <key>`** on every `/v1` call.
+
+**Legacy routes** (`POST /process`, `POST /process/submit`, job polling under `/process/jobs/...`) remain for older integrations; new work should use **`/v1`**.
+
+### Web UI (`mesh2cad-ui`)
+
+```bash
+mesh2cad-ui    # default http://127.0.0.1:7860 — Gradio: path or upload, JSON + downloads
+```
+
+Uses **`MESH2CAD_STATE_DIR`** (or **`$TMPDIR`**) for temp uploads and job files. First-run browser UI may prompt for an admin user (see app logs for setup URLs).
+
+### Docker (single host)
+
+```bash
+cp deploy/env.example .env    # optional; edit MESH2CAD_* and ports
+docker compose up --build     # API on port 8000 (MESH2CAD_HOST_PORT)
+```
+
+**Redis + background workers** (recommended when jobs are long or you want the API process to stay responsive):
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.queue.yml up -d --build
+```
+
+Details: **[docs/deploy-docker.md](docs/deploy-docker.md)**.
+
+### Kubernetes
+
+Production-oriented bundle (in-cluster Redis, **one Pod** with API + `mesh2cad-rq-worker`, **ReadWriteOnce** PVC):
+
+```bash
+kubectl apply -k deploy/k8s
+```
+
+Edit **`deploy/k8s/deployment-api.yaml`** image references before apply. Thread-only variant and Ingress template: **`deploy/k8s/README.md`**.
+
+## Deploying for users today
+
+The project is **deployable today** as a **single-tenant** service: one persistent **`MESH2CAD_STATE_DIR`**, one coordinated API + job fleet, and no hard dependency on Postgres or S3. That matches internal tools, per-customer VMs, or one namespace per customer.
+
+| You should have | Why |
+|-----------------|-----|
+| **Persistent disk** for `MESH2CAD_STATE_DIR` | SQLite, uploads, and job artifacts live here. |
+| **TLS** in front of the app (reverse proxy or Ingress) | Encrypt traffic; set **`MESH2CAD_SECURE_COOKIES=true`** for the browser UI. |
+| **`MESH2CAD_API_KEYS`** on any untrusted network | `/v1` is otherwise open. |
+| **Redis + RQ** for production-ish load | `docker-compose.queue.yml` or **`kubectl apply -k deploy/k8s`** so long runs do not block Uvicorn; see **[docs/operations.md](docs/operations.md)**. |
+| **Backups + retention** | `scripts/backup-mesh2cad-state.sh` (host) or `kubectl exec` + `tar` (see operations doc); schedule **`mesh2cad-purge-jobs`**. |
+| **Observability (optional)** | **`MESH2CAD_LOG_JSON`**, **`MESH2CAD_LOG_LEVEL`**; **`MESH2CAD_METRICS_ENABLED`** for Prometheus (protect **`/metrics`** at the network edge). |
+
+**Prebuilt images:** CI can publish **`ghcr.io/<owner>/<repo>:latest`** (API + queue client) and **`:cad`** (includes **build123d** for in-container STEP export). Pull and point your compose or Kubernetes manifests at those tags.
+
+**Optional distribution:** publish the **`mesh2cad`** package to PyPI (or a private index) so users can `pip install "mesh2cad[api]"` without cloning; you still need a process manager or container for long-running **`mesh2cad-api`**.
+
+**Not required for “today” but needed for multi-tenant SaaS scale-out:** shared Postgres for metadata, object storage / pre-signed downloads for artifacts, and multiple stateless API replicas without SQLite contention — see **[docs/scale-out-roadmap.md](docs/scale-out-roadmap.md)**.
 
 ## Environment
 
@@ -131,9 +206,15 @@ Run on a schedule (e.g. weekly cron) so `MESH2CAD_STATE_DIR` does not grow witho
 - **Horizontal job workers:** set **`MESH2CAD_JOB_BACKEND=rq`** and **`MESH2CAD_REDIS_URL`**, then run **`mesh2cad-rq-worker`** (see **`docker-compose.queue.yml`**). On Kubernetes with a **ReadWriteOnce** PVC, run the API and worker in one Pod (`kubectl apply -k deploy/k8s`). Workers still share **`MESH2CAD_STATE_DIR`** and SQLite; WAL mode helps but you should keep concurrent writers low. See **[docs/operations.md](docs/operations.md)** and **`deploy/k8s/README.md`**.
 - **Long-term scale:** shared object storage for artifacts and a non-SQLite job store remain a product direction beyond RQ.
 
-### Docker
+### Docker and Kubernetes (reference)
 
-Non-root images and compose files live at the repo root: **`Dockerfile`** (API + queue client), **`Dockerfile.full`** (adds **`[cad]`** / build123d for in-container STEP export), **`docker-compose.yml`**, and **`docker-compose.queue.yml`** (Redis + RQ worker + API env). Health checks use **`GET /ready`** (includes a Redis ping when RQ is enabled). Pushes to **`main`** / **`master`** publish **`ghcr.io/<owner>/<repo>:latest`**, **`:cad`**, and SHA-tagged variants (workflow **Publish container images**). Kubernetes: **`kubectl apply -k deploy/k8s`** for Redis + a single Pod (API + `mesh2cad-rq-worker`) sharing a **ReadWriteOnce** PVC—see **`deploy/k8s/README.md`**. See **[docs/deploy-docker.md](docs/deploy-docker.md)**, **[docs/operations.md](docs/operations.md)**, and **[docs/scale-out-roadmap.md](docs/scale-out-roadmap.md)**.
+Images: **`Dockerfile`** (API + queue), **`Dockerfile.full`** (**`[cad]`** / build123d). Compose: **`docker-compose.yml`**, **`docker-compose.queue.yml`**. Health checks use **`GET /ready`**. Pushes to **`main`** / **`master`** can publish **`ghcr.io/<owner>/<repo>:latest`**, **`:cad`**, and SHA-tagged variants (**Publish container images** workflow). Full checklist: **[docs/deploy-docker.md](docs/deploy-docker.md)**.
+
+## Security and privacy
+
+- Processing is **local** by default; this repo does not embed calls to paid third-party “AI mesh” APIs.
+- **Do not commit** real API keys, tokens, or production passwords (`.env` is gitignored). Automated tests use **dummy** credentials only; change defaults for real deployments.
+- If a secret is ever pasted into chat, a ticket, or a commit, **revoke and rotate** it immediately—assume it is compromised.
 
 ## Benchmarks & north star
 
