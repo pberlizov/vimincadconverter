@@ -13,6 +13,158 @@ from mesh2cad.jobs.exceptions import CANCEL_FILENAME, JobCancelledError, JobTime
 from mesh2cad.jobs.worker_subprocess import run_cli_worker_subprocess
 from mesh2cad.ui.db import get_job, get_job_paths, reset_job_for_retry, update_job
 
+
+def shutdown_job_executor(*, wait: bool = True) -> None:
+    """Stop the thread-pool executor (called from FastAPI lifespan on shutdown)."""
+    global _EXECUTOR
+    with _EXECUTOR_LOCK:
+        if _EXECUTOR is not None:
+            _EXECUTOR.shutdown(wait=wait, cancel_futures=False)
+            _EXECUTOR = None
+
+
+def complete_mesh_job_sync(
+    *,
+    job_id: str,
+    input_path: str,
+    output_dir: str | None,
+    artifact_dir: str,
+    sample_count: int,
+    simplify_target_faces: int | None,
+    build: bool,
+    auto_tune_sampling: bool,
+    align_surface_metrics: bool = True,
+    icp_iterations: int = 10,
+    icp_seed: int = 0,
+    include_script: bool = True,
+    tolerances: dict[str, Any] | None = None,
+    icp_hybrid_hull_weight: float | None = None,
+) -> dict[str, Any]:
+    """Run processing + persist success (used by thread pool and RQ workers)."""
+    update_job(job_id, status="processing")
+    worker_request: dict[str, Any] = {
+        "input_path": input_path,
+        "output_dir": output_dir,
+        "artifact_dir": artifact_dir,
+        "sample_count": sample_count,
+        "simplify_target_faces": simplify_target_faces,
+        "build": build,
+        "auto_tune_sampling": auto_tune_sampling,
+        "align_surface_metrics": align_surface_metrics,
+        "icp_iterations": icp_iterations,
+        "icp_seed": icp_seed,
+        "include_script": include_script,
+        "tolerances": tolerances,
+        "icp_hybrid_hull_weight": icp_hybrid_hull_weight,
+    }
+    payload = run_cli_worker_subprocess(worker_request=worker_request)
+    update_job(
+        job_id,
+        status="completed",
+        source_path=payload.get("source_path"),
+        step_path=(payload.get("build") or {}).get("step_path"),
+        warnings=payload.get("warnings", []),
+        payload=payload,
+        error_text=None,
+    )
+    schedule_job_webhook(job_id)
+    return payload
+
+
+def finalize_mesh_job_failure(job_id: str, exc: BaseException) -> None:
+    """Persist terminal failure state after ``complete_mesh_job_sync`` raises."""
+    if isinstance(exc, CancelledError):
+        update_job(
+            job_id,
+            status="cancelled",
+            warnings=["Job was cancelled before the worker subprocess started."],
+            payload={
+                "failure": {
+                    "stage": "queue",
+                    "type": "cancelled",
+                    "message": "Executor future cancelled.",
+                    "hints": ["The job never left the thread-pool queue."],
+                }
+            },
+            error_text="Executor future cancelled.",
+        )
+        schedule_job_webhook(job_id)
+        return
+    if isinstance(exc, JobCancelledError):
+        update_job(
+            job_id,
+            status="cancelled",
+            warnings=[str(exc)],
+            payload={
+                "failure": {
+                    "stage": "worker",
+                    "type": "cancelled",
+                    "message": str(exc),
+                    "hints": [
+                        "The worker subprocess was terminated after a cancel request.",
+                    ],
+                }
+            },
+            error_text=str(exc),
+        )
+        schedule_job_webhook(job_id)
+        return
+    if isinstance(exc, JobTimeoutError):
+        update_job(
+            job_id,
+            status="failed",
+            warnings=[str(exc)],
+            payload={
+                "failure": {
+                    "stage": "worker",
+                    "type": "timeout",
+                    "message": str(exc),
+                    "hints": [
+                        "Increase MESH2CAD_JOB_TIMEOUT_SEC or reduce mesh complexity / sample_count.",
+                    ],
+                }
+            },
+            error_text=str(exc),
+        )
+        schedule_job_webhook(job_id)
+        return
+    if isinstance(exc, Exception):
+        update_job(
+            job_id,
+            status="failed",
+            warnings=[str(exc)],
+            payload={
+                "failure": {
+                    "stage": "worker",
+                    "type": "error",
+                    "message": str(exc),
+                    "hints": [
+                        "Inspect job artifacts (report) after completion, or re-run with --no-build.",
+                        "If stderr mentions missing build123d, install optional dependency build123d.",
+                    ],
+                }
+            },
+            error_text=str(exc),
+        )
+        schedule_job_webhook(job_id)
+        return
+
+    update_job(
+        job_id,
+        status="failed",
+        warnings=[repr(exc)],
+        payload={
+            "failure": {
+                "stage": "worker",
+                "type": "error",
+                "message": repr(exc),
+                "hints": ["Unexpected worker termination."],
+            }
+        },
+        error_text=repr(exc),
+    )
+    schedule_job_webhook(job_id)
+
 _EXECUTOR: ThreadPoolExecutor | None = None
 _EXECUTOR_LOCK = Lock()
 _FUTURES: dict[str, Future[dict[str, Any]]] = {}
@@ -36,7 +188,32 @@ def submit_job(
     tolerances: dict[str, Any] | None = None,
     icp_hybrid_hull_weight: float | None = None,
 ) -> Future[dict[str, Any]]:
+    backend = os.environ.get("MESH2CAD_JOB_BACKEND", "").strip().lower()
+    if backend in {"rq", "redis"} and not os.environ.get("MESH2CAD_REDIS_URL", "").strip():
+        raise RuntimeError("MESH2CAD_JOB_BACKEND=rq requires MESH2CAD_REDIS_URL to be set.")
+
     update_job(job_id, status="queued")
+    from mesh2cad.jobs.rq_support import enqueue_mesh_job, use_rq_backend
+
+    if use_rq_backend():
+        enqueue_mesh_job(
+            job_id=job_id,
+            input_path=str(input_path),
+            output_dir=str(output_dir) if output_dir is not None else None,
+            artifact_dir=str(artifact_dir),
+            sample_count=sample_count,
+            simplify_target_faces=simplify_target_faces,
+            build=build,
+            auto_tune_sampling=auto_tune_sampling,
+            align_surface_metrics=align_surface_metrics,
+            icp_iterations=icp_iterations,
+            icp_seed=icp_seed,
+            include_script=include_script,
+            tolerances=tolerances,
+            icp_hybrid_hull_weight=icp_hybrid_hull_weight,
+        )
+        return Future()
+
     future = _executor().submit(
         _run_job,
         job_id=job_id,
@@ -62,6 +239,11 @@ def submit_job(
 
 def request_job_cancel(job_id: str) -> dict[str, str]:
     """Cancel a queued job if possible; otherwise write a marker for the running worker."""
+    from mesh2cad.jobs.rq_support import try_cancel_rq_queued_job
+
+    if try_cancel_rq_queued_job(job_id):
+        return {"status": "cancelled", "detail": "removed_from_rq_queue"}
+
     with _FUTURES_LOCK:
         fut = _FUTURES.get(job_id)
     if fut is not None and fut.cancel():
@@ -155,110 +337,29 @@ def _run_job(
     tolerances: dict[str, Any] | None = None,
     icp_hybrid_hull_weight: float | None = None,
 ) -> dict[str, Any]:
-    update_job(job_id, status="processing")
-    worker_request: dict[str, Any] = {
-        "input_path": input_path,
-        "output_dir": output_dir,
-        "artifact_dir": artifact_dir,
-        "sample_count": sample_count,
-        "simplify_target_faces": simplify_target_faces,
-        "build": build,
-        "auto_tune_sampling": auto_tune_sampling,
-        "align_surface_metrics": align_surface_metrics,
-        "icp_iterations": icp_iterations,
-        "icp_seed": icp_seed,
-        "include_script": include_script,
-        "tolerances": tolerances,
-        "icp_hybrid_hull_weight": icp_hybrid_hull_weight,
-    }
-    payload = run_cli_worker_subprocess(worker_request=worker_request)
-    update_job(
-        job_id,
-        status="completed",
-        source_path=payload.get("source_path"),
-        step_path=(payload.get("build") or {}).get("step_path"),
-        warnings=payload.get("warnings", []),
-        payload=payload,
-        error_text=None,
+    return complete_mesh_job_sync(
+        job_id=job_id,
+        input_path=input_path,
+        output_dir=output_dir,
+        artifact_dir=artifact_dir,
+        sample_count=sample_count,
+        simplify_target_faces=simplify_target_faces,
+        build=build,
+        auto_tune_sampling=auto_tune_sampling,
+        align_surface_metrics=align_surface_metrics,
+        icp_iterations=icp_iterations,
+        icp_seed=icp_seed,
+        include_script=include_script,
+        tolerances=tolerances,
+        icp_hybrid_hull_weight=icp_hybrid_hull_weight,
     )
-    schedule_job_webhook(job_id)
-    return payload
 
 
 def _finalize_future(job_id: str, future: Future[dict[str, Any]]) -> None:
     try:
         future.result()
-    except CancelledError:
-        update_job(
-            job_id,
-            status="cancelled",
-            warnings=["Job was cancelled before the worker subprocess started."],
-            payload={
-                "failure": {
-                    "stage": "queue",
-                    "type": "cancelled",
-                    "message": "Executor future cancelled.",
-                    "hints": ["The job never left the thread-pool queue."],
-                }
-            },
-            error_text="Executor future cancelled.",
-        )
-        schedule_job_webhook(job_id)
-    except JobCancelledError as exc:
-        update_job(
-            job_id,
-            status="cancelled",
-            warnings=[str(exc)],
-            payload={
-                "failure": {
-                    "stage": "worker",
-                    "type": "cancelled",
-                    "message": str(exc),
-                    "hints": [
-                        "The worker subprocess was terminated after a cancel request.",
-                    ],
-                }
-            },
-            error_text=str(exc),
-        )
-        schedule_job_webhook(job_id)
-    except JobTimeoutError as exc:
-        update_job(
-            job_id,
-            status="failed",
-            warnings=[str(exc)],
-            payload={
-                "failure": {
-                    "stage": "worker",
-                    "type": "timeout",
-                    "message": str(exc),
-                    "hints": [
-                        "Increase MESH2CAD_JOB_TIMEOUT_SEC or reduce mesh complexity / sample_count.",
-                    ],
-                }
-            },
-            error_text=str(exc),
-        )
-        schedule_job_webhook(job_id)
-    except Exception as exc:
-        update_job(
-            job_id,
-            status="failed",
-            warnings=[str(exc)],
-            payload={
-                "failure": {
-                    "stage": "worker",
-                    "type": "error",
-                    "message": str(exc),
-                    "hints": [
-                        "Inspect job artifacts (report) after completion, or re-run with --no-build.",
-                        "If stderr mentions missing build123d, install optional dependency build123d.",
-                    ],
-                }
-            },
-            error_text=str(exc),
-        )
-        schedule_job_webhook(job_id)
+    except BaseException as exc:
+        finalize_mesh_job_failure(job_id, exc)
     finally:
         with _FUTURES_LOCK:
             _FUTURES.pop(job_id, None)

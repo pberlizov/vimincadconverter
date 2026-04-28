@@ -32,8 +32,9 @@ def _is_hole_axis_aligned(axis_direction: tuple[float, float, float], z_dir: tup
 def generate_script(features: list[Feature]) -> str:
     """Generate a narrow build123d script for the currently supported feature set.
 
-    This includes base extrusion, aligned through-holes, and angled through-hole support
-    by generating dedicated sketch planes for non-aligned cylinder axes.
+    This includes base extrusion, aligned through-holes, angled through-hole support
+    by generating dedicated sketch planes for non-aligned cylinder axes, and angled
+    countersink support for countersinks matched to angled holes.
     """
     revolve_feature = next((feature for feature in features if isinstance(feature, RevolveSolidFeature)), None)
     base_feature = next(
@@ -102,9 +103,30 @@ def generate_script(features: list[Feature]) -> str:
     else:
         lines.append("HOLES = []")
 
-    if blind_holes:
+    aligned_blind_holes: list[BlindHoleFeature] = []
+    angled_blind_holes: list[BlindHoleFeature] = []
+    for hole in blind_holes:
+        if _is_hole_axis_aligned(hole.axis_direction, hole_plane_z_dir):
+            aligned_blind_holes.append(hole)
+        else:
+            angled_blind_holes.append(hole)
+
+    if angled_blind_holes:
+        lines.append("ANGLED_BLIND_HOLES = [")
+        for hole in angled_blind_holes:
+            hole_origin = format_tuple3(hole.axis_origin)
+            hole_direction = format_tuple3(hole.axis_direction)
+            hole_x_dir = format_tuple3(revolve_sketch_frame(hole.axis_origin, hole.axis_direction)[2])
+            lines.append(
+                f"    ({hole_origin}, {hole_x_dir}, {hole_direction}, {hole.center_xy[0]:.6f}, {hole.center_xy[1]:.6f}, {hole.radius:.6f}, {hole.hole_depth:.6f}),"
+            )
+        lines.append("]")
+    else:
+        lines.append("ANGLED_BLIND_HOLES = []")
+
+    if aligned_blind_holes:
         lines.append("BLIND_HOLES = [")
-        for hole in blind_holes:
+        for hole in aligned_blind_holes:
             lines.append(
                 f"    ({hole.center_xy[0]:.6f}, {hole.center_xy[1]:.6f}, {hole.radius:.6f}, {hole.hole_depth:.6f}),"
             )
@@ -112,9 +134,30 @@ def generate_script(features: list[Feature]) -> str:
     else:
         lines.append("BLIND_HOLES = []")
 
-    if countersink_holes:
+    aligned_countersinks: list[CounterSinkHoleFeature] = []
+    angled_countersinks: list[CounterSinkHoleFeature] = []
+    for sink in countersink_holes:
+        if _is_hole_axis_aligned(sink.axis_direction, hole_plane_z_dir):
+            aligned_countersinks.append(sink)
+        else:
+            angled_countersinks.append(sink)
+
+    if angled_countersinks:
+        lines.append("ANGLED_COUNTERSINKS = [")
+        for sink in angled_countersinks:
+            sink_origin = format_tuple3(sink.axis_origin)
+            sink_direction = format_tuple3(sink.axis_direction)
+            sink_x_dir = format_tuple3(revolve_sketch_frame(sink.axis_origin, sink.axis_direction)[2])
+            lines.append(
+                f"    ({sink_origin}, {sink_x_dir}, {sink_direction}, {sink.center_xy[0]:.6f}, {sink.center_xy[1]:.6f}, {sink.hole_radius:.6f}, {sink.counter_sink_radius:.6f}, {sink.counter_sink_angle_deg:.6f}, {str(bool(sink.start_from_top))}),"
+            )
+        lines.append("]")
+    else:
+        lines.append("ANGLED_COUNTERSINKS = []")
+
+    if aligned_countersinks:
         lines.append("COUNTERSINK_HOLES = [")
-        for hole in countersink_holes:
+        for hole in aligned_countersinks:
             lines.append(
                 f"    ({hole.center_xy[0]:.6f}, {hole.center_xy[1]:.6f}, {hole.hole_radius:.6f}, {hole.counter_sink_radius:.6f}, {hole.counter_sink_angle_deg:.6f}, {str(bool(hole.start_from_top))}),"
             )
@@ -173,6 +216,29 @@ def generate_script(features: list[Feature]) -> str:
                 "        with BuildSketch(HOLE_PLANE):",
                 "            Circle(radius, mode=Mode.SUBTRACT)",
                 "        extrude(amount=depth, mode=Mode.SUBTRACT)",
+            ]
+        )
+
+    if angled_countersinks:
+        lines.extend(
+            [
+                "    for sink_origin, sink_x_dir, sink_axis, x_pos, y_pos, hole_radius, sink_radius, sink_angle, start_from_top in ANGLED_COUNTERSINKS:",
+                "        SINK_PLANE = Plane(origin=sink_origin, x_dir=sink_x_dir, z_dir=sink_axis)",
+                "        with Locations(SINK_PLANE):",
+                "            with Locations((x_pos, y_pos)):",
+                "                CounterSinkHole(radius=hole_radius, counter_sink_radius=sink_radius, depth=None, counter_sink_angle=sink_angle, mode=Mode.SUBTRACT)",
+            ]
+        )
+
+    if angled_blind_holes:
+        lines.extend(
+            [
+                "    for blind_origin, blind_x_dir, blind_axis, x_pos, y_pos, radius, h_depth in ANGLED_BLIND_HOLES:",
+                "        BLIND_PLANE = Plane(origin=blind_origin, x_dir=blind_x_dir, z_dir=blind_axis)",
+                "        with BuildSketch(BLIND_PLANE):",
+                "            with Locations((x_pos, y_pos)):",
+                "                Circle(radius)",
+                "        extrude(amount=h_depth, mode=Mode.SUBTRACT)",
             ]
         )
 

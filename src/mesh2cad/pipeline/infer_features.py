@@ -296,6 +296,10 @@ def _infer_countersink_holes(
         if match is None:
             continue
 
+        alignment = abs(float(np.dot(cone.axis_direction, np.asarray(match.axis_direction, dtype=np.float64))))
+        if alignment < math.cos(math.radians(tolerances.angular_deg * 2.5)):
+            continue
+
         counter_sink_radius = float(max(cone.base_radius, cone.top_radius))
         if counter_sink_radius <= match.radius + max(tolerances.linear * 1.5, match.radius * 0.08):
             continue
@@ -319,6 +323,8 @@ def _infer_countersink_holes(
                     "counter_sink_radius": counter_sink_radius,
                     "counter_sink_angle_deg": cone.semi_angle_deg * 2.0,
                     "start_from_top": start_from_top,
+                    "axis_origin": match.axis_origin,
+                    "axis_direction": match.axis_direction,
                 },
                 references={},
                 center_xy=center_xy,
@@ -326,6 +332,8 @@ def _infer_countersink_holes(
                 counter_sink_radius=counter_sink_radius,
                 counter_sink_angle_deg=float(cone.semi_angle_deg * 2.0),
                 start_from_top=start_from_top,
+                axis_origin=match.axis_origin,
+                axis_direction=match.axis_direction,
             )
         )
 
@@ -531,9 +539,6 @@ def _infer_blind_holes(
 
     blinds: list[BlindHoleFeature] = []
     for cylinder in cylinder_primitives:
-        alignment = abs(float(np.dot(cylinder.axis_direction, extrusion_axis)))
-        if alignment < math.cos(math.radians(tolerances.angular_deg * 2.0)):
-            continue
         h = cylinder.height_estimate
         if h is None:
             continue
@@ -542,7 +547,11 @@ def _infer_blind_holes(
         if h < depth * _BLIND_CYLINDER_MIN_DEPTH_RATIO or h > depth * _BLIND_CYLINDER_MAX_DEPTH_RATIO:
             continue
 
-        offset = np.asarray(cylinder.axis_origin, dtype=np.float64) - origin
+        axis_origin = np.asarray(cylinder.axis_origin, dtype=np.float64)
+        axis_direction = np.asarray(cylinder.axis_direction, dtype=np.float64)
+        axis_direction = axis_direction / max(np.linalg.norm(axis_direction), 1e-12)
+
+        offset = axis_origin - origin
         t_ax = float(np.dot(offset, extrusion_axis))
         if t_ax + h * 0.52 > depth + tolerances.linear * 2.0:
             continue
@@ -579,7 +588,7 @@ def _infer_blind_holes(
         confidence = Confidence(
             score=min(1.0, (cylinder.confidence.score * 0.72) + 0.12),
             reasons=[
-                "aligned cylinder shorter than stock thickness",
+                "cylinder shorter than stock thickness",
                 f"blind hole depth {hole_depth:.4f}",
                 f"radius {cylinder.radius:.4f}",
             ],
@@ -592,11 +601,15 @@ def _infer_blind_holes(
                     "center_xy": center_xy,
                     "radius": cylinder.radius,
                     "hole_depth": hole_depth,
+                    "axis_origin": tuple(float(x) for x in axis_origin.tolist()),
+                    "axis_direction": tuple(float(x) for x in axis_direction.tolist()),
                 },
                 references={},
                 center_xy=center_xy,
                 radius=float(cylinder.radius),
                 hole_depth=hole_depth,
+                axis_origin=tuple(float(x) for x in axis_origin.tolist()),
+                axis_direction=tuple(float(x) for x in axis_direction.tolist()),
             )
         )
 

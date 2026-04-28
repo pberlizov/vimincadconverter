@@ -58,7 +58,8 @@ There is no robust verified boss or pocket inference yet.
 Current state:
 
 - angled through-holes are now partially supported when the underlying cylinder primitive axis crosses the inferred stock faces and the hole fits the base profile.
-- more complex skewed countersinks/counterbores and non-axial blind holes are not yet fully supported.
+- angled countersinks are supported when matched to angled through-holes, with the countersink axis aligned to the hole axis.
+- angled blind holes are supported when the cylinder axis is not aligned with the extrusion axis.
 
 ### Organic or freeform surfaces
 

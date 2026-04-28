@@ -1242,6 +1242,93 @@ def test_generate_build123d_script_supports_countersinks():
     assert "with Locations(sink_plane):" in script
 
 
+def test_generate_build123d_script_supports_angled_countersink():
+    base_feature = BaseExtrudeFeature(
+        kind=FeatureKind.BASE_EXTRUDE,
+        confidence=Confidence(score=0.95, reasons=[]),
+        parameters={"depth": 4.0},
+        references={},
+        profile_loops=[[(-5.0, -3.0), (5.0, -3.0), (5.0, 3.0), (-5.0, 3.0)]],
+        depth=4.0,
+        sketch_plane={
+            "origin": (0.0, 0.0, 0.0),
+            "x_dir": (1.0, 0.0, 0.0),
+            "y_dir": (0.0, 1.0, 0.0),
+            "z_dir": (0.0, 0.0, 1.0),
+        },
+    )
+    angled_countersink = CounterSinkHoleFeature(
+        kind=FeatureKind.COUNTERSINK_HOLE,
+        confidence=Confidence(score=0.88, reasons=[]),
+        parameters={
+            "center_xy": (0.0, 0.0),
+            "hole_radius": 1.0,
+            "counter_sink_radius": 2.0,
+            "counter_sink_angle_deg": 90.0,
+            "start_from_top": True,
+            "axis_origin": (0.0, 0.0, 0.0),
+            "axis_direction": (0.0, 1.0, 1.0),
+        },
+        references={},
+        center_xy=(0.0, 0.0),
+        hole_radius=1.0,
+        counter_sink_radius=2.0,
+        counter_sink_angle_deg=90.0,
+        start_from_top=True,
+        axis_origin=(0.0, 0.0, 0.0),
+        axis_direction=(0.0, 1.0, 1.0),
+    )
+
+    script = generate_script([base_feature, angled_countersink])
+
+    assert "ANGLED_COUNTERSINKS = [" in script
+    assert "COUNTERSINK_HOLES = []" in script
+    assert "SINK_PLANE = Plane(origin=sink_origin, x_dir=sink_x_dir, z_dir=sink_axis)" in script
+    assert "CounterSinkHole(radius=hole_radius, counter_sink_radius=sink_radius, depth=None, counter_sink_angle=sink_angle, mode=Mode.SUBTRACT)" in script
+
+
+def test_generate_build123d_script_supports_angled_blind_hole():
+    base_feature = BaseExtrudeFeature(
+        kind=FeatureKind.BASE_EXTRUDE,
+        confidence=Confidence(score=0.95, reasons=[]),
+        parameters={"depth": 4.0},
+        references={},
+        profile_loops=[[(-5.0, -3.0), (5.0, -3.0), (5.0, 3.0), (-5.0, 3.0)]],
+        depth=4.0,
+        sketch_plane={
+            "origin": (0.0, 0.0, 0.0),
+            "x_dir": (1.0, 0.0, 0.0),
+            "y_dir": (0.0, 1.0, 0.0),
+            "z_dir": (0.0, 0.0, 1.0),
+        },
+    )
+    angled_blind_hole = BlindHoleFeature(
+        kind=FeatureKind.BLIND_HOLE,
+        confidence=Confidence(score=0.88, reasons=[]),
+        parameters={
+            "center_xy": (0.0, 0.0),
+            "radius": 1.0,
+            "hole_depth": 2.0,
+            "axis_origin": (0.0, 0.0, 0.0),
+            "axis_direction": (0.0, 1.0, 1.0),
+        },
+        references={},
+        center_xy=(0.0, 0.0),
+        radius=1.0,
+        hole_depth=2.0,
+        axis_origin=(0.0, 0.0, 0.0),
+        axis_direction=(0.0, 1.0, 1.0),
+    )
+
+    script = generate_script([base_feature, angled_blind_hole])
+
+    assert "ANGLED_BLIND_HOLES = [" in script
+    assert "BLIND_HOLES = []" in script
+    assert "BLIND_PLANE = Plane(origin=blind_origin, x_dir=blind_x_dir, z_dir=blind_axis)" in script
+    assert "Circle(radius)" in script
+    assert "extrude(amount=h_depth, mode=Mode.SUBTRACT)" in script
+
+
 def test_generate_build123d_script_supports_spherical_modifiers():
     base_feature = BaseExtrudeFeature(
         kind=FeatureKind.BASE_EXTRUDE,

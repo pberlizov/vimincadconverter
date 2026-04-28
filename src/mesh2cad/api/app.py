@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import uuid
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from mesh2cad.api.middleware_request_id import RequestIDMiddleware
@@ -38,6 +39,18 @@ def create_app():
 
     configure_logging()
 
+    @asynccontextmanager
+    async def _lifespan(_app: object):
+        yield
+        try:
+            from mesh2cad.jobs.runner import shutdown_job_executor
+
+            shutdown_job_executor(wait=True)
+        except Exception:
+            import logging
+
+            logging.getLogger(__name__).exception("shutdown_job_executor failed")
+
     app = FastAPI(
         title="ViminCADConverter API",
         version="1.0.0",
@@ -46,6 +59,7 @@ def create_app():
             "Use **/v1/** routes for uploads, API keys, artifact downloads, and webhooks. "
             "Legacy **/process** routes remain for backward compatibility."
         ),
+        lifespan=_lifespan,
     )
     cors = os.environ.get("MESH2CAD_CORS_ORIGINS", "").strip()
     if cors:

@@ -38,14 +38,36 @@ Modules:
 
 Responsibilities:
 
-- recover primitive hypotheses such as planes and cylinders
-- infer higher-level CAD-like features from primitive relationships, including through-hole and angled through-hole inference from cylinder fits
-- choose between the current prismatic and rotational routes
+- recover primitive hypotheses such as planes, cylinders, and cones
+- infer higher-level CAD-like features from primitive relationships:
+  - `ThroughHoleFeature`: cylinder primitives; includes angled/non-parallel axes when the cylinder axis crosses the inferred stock faces (detected via plane-to-plane face analysis)
+  - `CounterSinkHoleFeature`: cone primitives paired with through-holes; supports angled countersinks aligned to their parent hole axes
+  - `BlindHoleFeature`: cylinder primitives with axis origin and direction; supports both aligned (axis parallel to extrusion) and angled configurations
+  - `BaseExtrudeFeature`: paired parallel planes define the stock base shape and extrusion profile
+  - `RevolveSolidFeature`: single dominant cylinder inferred as a revolve axis (rotational route only)
+- choose between prismatic and rotational routes based on inferred feature types and part class analysis
+
+**Route selection logic:**
+
+- **Prismatic route** (preferred): paired planes → extrusion profile → feature candidates (holes, bosses)
+  - triggers when base extrusion feature extraction succeeds
+  - through-holes, countersinks, and blind holes are inferred; angled variants are supported when geometric constraints permit
+  - route remains preferred even if revolve route is available (favors prismatic interpretations)
+
+- **Rotational route** (fallback): single strong cylinder → revolve feature + pose-aware script
+  - triggers when `part_class == PartClass.ROTATIONAL` OR no prismatic base extraction succeeds
+  - mutually exclusive with prismatic route in final output
+
+**Angled feature inference:**
+
+- **Angled through-holes**: a cylinder primitive axis is checked for intersection with the inferred top and bottom stock faces; if both are crossed, the hole is treated as non-parallel and stored with `axis_origin` and `axis_direction`
+- **Angled countersinks**: when a cone primitive matches a through-hole (same entry region on top face), the cone's axis is aligned to the hole's axis
+- **Angled blind holes**: a cylinder primitive not aligned with the extrusion axis is inferred as a blind hole with explicit axis fields; depth is measured along the axis direction
 
 Current route split:
 
-- prismatic route: paired planes -> extrusion profile -> through-hole candidates, including angled through-holes when cylinder axes cross the inferred stock faces
-- rotational route: dominant cylinder -> revolve feature -> pose-aware revolve script
+- prismatic route: paired planes → extrusion profile → through-hole candidates (aligned or angled), countersinks, blind holes
+- rotational route: dominant cylinder → revolve feature → pose-aware revolve script
 
 ### CAD synthesis and export
 
@@ -57,10 +79,21 @@ Modules:
 
 Responsibilities:
 
-- convert inferred features into `build123d` source
+- convert inferred features into `build123d` source code:
+  - **aligned through-holes**: simple Hole() calls with standard sketch-plane depth
+  - **angled through-holes**: create a pose-aware sketch plane perpendicular to the hole axis; drill through-hole along that local frame
+  - **countersinks**: paired with through-holes; angled countersinks use the parent hole's axis plane
+  - **blind holes**: cylinder-based pockets; angled blind holes generate pose-aware sketches and hole depth measured along axis direction
+  - **base extrusion**: Sketch + Extrude with inferred profile boundary
 - execute generated code when `build123d` is available
 - export `STEP` and preview `STL`
 - attach build metadata such as volume and extents
+
+**Angled feature script generation:**
+
+- When a through-hole or blind hole has non-aligned axes (stored in feature as `axis_origin` and `axis_direction`), the script generator creates a dedicated `REVOLVE_PLANE` (pose-aware sketch plane) perpendicular to that axis
+- The sketch is located at the axis origin with local X and Y spanned by radial directions, preserving hole entry geometry
+- This ensures angled holes drill in the correct direction regardless of part orientation
 
 ### Validation
 

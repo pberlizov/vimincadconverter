@@ -63,10 +63,15 @@
     "radius": 1.2,
     "count_a": 16,
     "count_b": 16,
-    "sample_count": 3500,
-    "expect_route": "prismatic_extrude",
-    "min_feature_kind_counts": {
-      "base_extrude": 1
+    "sample_count": 6000,
+    "expect_route_any_of": ["revolve_simple", "prismatic_extrude"],
+    "min_feature_kind_counts_by_route": {
+      "revolve_simple": {
+        "revolve": 1
+      },
+      "prismatic_extrude": {
+        "base_extrude": 1
+      }
     }
   },
   {

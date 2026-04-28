@@ -1,0 +1,39 @@
+# Optional overlay: Redis + RQ worker + API configured for out-of-process jobs.
+# Usage: docker compose -f docker-compose.yml -f docker-compose.queue.yml up -d
+#
+# All services share the same named volume for SQLite and job artifacts. Run multiple
+# API replicas only if each has its own state volume; with RQ you typically scale workers.
+
+services:
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes:
+      - mesh2cad_redis:/data
+
+  api:
+    environment:
+      MESH2CAD_JOB_BACKEND: rq
+      MESH2CAD_REDIS_URL: redis://redis:6379/0
+    depends_on:
+      - redis
+
+  rq-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        PIP_EXTRAS: ${MESH2CAD_PIP_EXTRAS:-api,queue}
+    restart: unless-stopped
+    command: ["mesh2cad-rq-worker"]
+    environment:
+      MESH2CAD_STATE_DIR: /data/state
+      MESH2CAD_REDIS_URL: redis://redis:6379/0
+      MESH2CAD_RQ_QUEUE: mesh2cad
+    volumes:
+      - mesh2cad_state:/data/state
+    depends_on:
+      - redis
+
+volumes:
+  mesh2cad_redis:

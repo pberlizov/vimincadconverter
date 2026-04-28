@@ -12,6 +12,12 @@ def estimate_point_normals_knn(
 ) -> NDArray[np.float64]:
     """Estimate normals for an unoriented point cloud via local PCA (k nearest neighbors)."""
     pts = np.asarray(points, dtype=np.float64)
+    from mesh2cad.mesh.point_normals_open3d import estimate_point_normals_open3d
+
+    o3 = estimate_point_normals_open3d(pts, k=k)
+    if o3 is not None:
+        return o3
+
     if len(pts) < max(4, k):
         out = np.zeros_like(pts)
         out[:, 2] = 1.0

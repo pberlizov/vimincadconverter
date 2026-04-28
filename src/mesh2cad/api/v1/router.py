@@ -359,6 +359,12 @@ def health_router() -> APIRouter:
             from mesh2cad.ui.state import ensure_state_dirs
 
             ensure_state_dirs()
+            from mesh2cad.jobs.rq_support import use_rq_backend
+
+            if use_rq_backend():
+                from mesh2cad.jobs.rq_support import ping_rq_redis
+
+                ping_rq_redis()
         except Exception as exc:
             return JSONResponse({"ready": False, "detail": str(exc)}, status_code=503)
         return JSONResponse({"ready": True})

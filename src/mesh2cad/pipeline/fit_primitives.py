@@ -105,9 +105,14 @@ def _fit_planes(cloud: SampledCloud, tolerances: ToleranceConfig) -> list[PlaneP
         distances = points @ representative_normal
         bucket_distances = distances[bucket_indices]
 
+        cos_angular = math.cos(math.radians(tolerances.angular_deg * 2.5))
+        normal_align_mask = np.abs(normals @ representative_normal) >= cos_angular
         peak_centers = _distance_peaks(bucket_distances, tolerances.linear)
         for peak in peak_centers:
-            close_mask = np.abs(distances - peak) <= max(tolerances.linear * 2.0, 1e-6)
+            close_mask = (
+                (np.abs(distances - peak) <= max(tolerances.linear * 2.0, 1e-6))
+                & normal_align_mask
+            )
             candidate_indices = np.flatnonzero(close_mask)
             if len(candidate_indices) < min_support:
                 continue

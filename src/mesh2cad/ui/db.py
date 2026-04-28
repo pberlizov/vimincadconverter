@@ -68,6 +68,12 @@ def initialize_database() -> None:
 @contextmanager
 def connect() -> Iterator[sqlite3.Connection]:
     conn = sqlite3.connect(get_database_path())
+    try:
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("PRAGMA busy_timeout=8000")
+    except sqlite3.Error:
+        pass
     conn.row_factory = sqlite3.Row
     try:
         yield conn

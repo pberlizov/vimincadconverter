@@ -1,6 +1,7 @@
+# API + Redis queue client + build123d (STEP/STL export in-container). Larger image than Dockerfile.
 FROM python:3.12-slim-bookworm
 
-ARG PIP_EXTRAS=api,queue
+ARG PIP_EXTRAS=api,queue,cad
 ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
@@ -9,7 +10,10 @@ ENV PYTHONUNBUFFERED=1 \
     MESH2CAD_BIND_PORT=8000
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl \
+    && apt-get install -y --no-install-recommends \
+        curl \
+        libgl1 \
+        libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -28,7 +32,7 @@ USER mesh2cad
 
 EXPOSE 8000
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=5s --start-period=45s --retries=3 \
     CMD curl -fsS "http://127.0.0.1:$MESH2CAD_BIND_PORT/ready" >/dev/null || exit 1
 
 CMD ["mesh2cad-api"]

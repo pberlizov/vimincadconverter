@@ -118,11 +118,23 @@ def run_case(case: dict[str, Any], *, tmp_dir: Path, auto_tune: bool = False) ->
 
 
 def assert_case_expectations(case: dict[str, Any], result: PipelineResult) -> None:
-    if "expect_route" in case:
-        assert result.reconstruction_plan.route == case["expect_route"]
-    min_counts: dict[str, int] = case.get("min_feature_kind_counts") or {}
-    for kind, minimum in min_counts.items():
-        assert result.feature_kinds.count(kind) >= int(minimum), (case["name"], kind, result.feature_kinds)
+    route = result.reconstruction_plan.route
+    any_routes = case.get("expect_route_any_of")
+    if isinstance(any_routes, list) and any_routes:
+        assert route in any_routes, (case["name"], route, any_routes)
+    elif "expect_route" in case:
+        assert route == case["expect_route"]
+
+    by_route = case.get("min_feature_kind_counts_by_route")
+    if isinstance(by_route, dict) and by_route:
+        counts = by_route.get(route)
+        assert counts is not None, (case["name"], route, list(by_route))
+        for kind, minimum in counts.items():
+            assert result.feature_kinds.count(kind) >= int(minimum), (case["name"], kind, result.feature_kinds)
+    else:
+        min_counts: dict[str, int] = case.get("min_feature_kind_counts") or {}
+        for kind, minimum in min_counts.items():
+            assert result.feature_kinds.count(kind) >= int(minimum), (case["name"], kind, result.feature_kinds)
     min_prim: dict[str, int] = case.get("min_primitive_kind_counts") or {}
     for kind, minimum in min_prim.items():
         assert result.primitive_kinds.count(kind) >= int(minimum), (case["name"], kind, result.primitive_kinds)

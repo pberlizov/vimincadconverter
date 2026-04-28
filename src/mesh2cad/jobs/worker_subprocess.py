@@ -1,4 +1,4 @@
-"""Shared CLI worker subprocess invocation (thread-pool jobs and optional RQ workers)."""
+"""Shared CLI worker subprocess invocation (thread-pool and RQ worker processes)."""
 
 from __future__ import annotations
 

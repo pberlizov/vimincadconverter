@@ -37,6 +37,8 @@ class CounterSinkHoleFeature(Feature):
     counter_sink_radius: float = 0.0
     counter_sink_angle_deg: float = 82.0
     start_from_top: bool = True
+    axis_origin: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    axis_direction: tuple[float, float, float] = (0.0, 0.0, 1.0)
 
 
 @dataclass(slots=True)
@@ -46,6 +48,8 @@ class BlindHoleFeature(Feature):
     center_xy: tuple[float, float] = (0.0, 0.0)
     radius: float = 0.0
     hole_depth: float = 0.0
+    axis_origin: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    axis_direction: tuple[float, float, float] = (0.0, 0.0, 1.0)
 
 
 @dataclass(slots=True)
