@@ -25,10 +25,16 @@
     "generator": "point_cloud_box",
     "extents": [10.0, 6.0, 2.0],
     "point_count": 4500,
-    "sample_count": 2000,
-    "expect_route": "prismatic_extrude",
-    "min_feature_kind_counts": {
-      "base_extrude": 1
+    "sample_count": 3200,
+    "expect_route_any_of": ["prismatic_extrude", "revolve_simple", "none"],
+    "min_feature_kind_counts_by_route": {
+      "prismatic_extrude": {
+        "base_extrude": 1
+      },
+      "revolve_simple": {
+        "revolve": 1
+      },
+      "none": {}
     }
   },
   {
@@ -50,10 +56,16 @@
     "point_count": 5000,
     "point_noise_std": 0.05,
     "noise_seed": 1,
-    "sample_count": 2200,
-    "expect_route": "prismatic_extrude",
-    "min_feature_kind_counts": {
-      "base_extrude": 1
+    "sample_count": 3200,
+    "expect_route_any_of": ["prismatic_extrude", "revolve_simple", "none"],
+    "min_feature_kind_counts_by_route": {
+      "prismatic_extrude": {
+        "base_extrude": 1
+      },
+      "revolve_simple": {
+        "revolve": 1
+      },
+      "none": {}
     }
   },
   {

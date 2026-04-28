@@ -22,10 +22,10 @@ Current CAD feature support:
 - `RevolveSolidFeature` for simple rotational parts when a strong cylinder primitive dominates.
 - generated `build123d` script output, with optional execution to produce `STEP` and preview `STL`.
 
-Current limitations:
+Scope and honesty:
 
-- boss/pocket inference is not yet robust for general noisy inputs.
-- unsupported: organic freeform geometry, assemblies, sheet-metal-specific reasoning, and advanced feature-tree semantics.
+- **Bosses and pockets** use conservative gates (primitive confidence, minimum support, profile span vs. boss radius, pocket convex-loop aspect ratio) so noisy scans throw fewer spurious modifiers; very ambiguous geometry may still under- or over-detect features.
+- **Organic / artistic surfaces**, **multi-body assemblies** (mates, per-part trees), **sheet-metal unfold/bend semantics**, and **source CAD feature history** are not recovered as first-class models. When the input mesh has **multiple disconnected components**, the pipeline keeps one body (largest by area by default, or `repair_component_index`) and emits a **warning**; extremely **thin plate** stock relative to width triggers a **sheet-metal scope** warning. NURBS or subdivision “as scanned” surfaces are not exported—output remains **build123d** primitive composition.
 
 ## Roadmap (depth and breadth)
 

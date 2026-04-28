@@ -15,6 +15,8 @@ class SceneAnalysis:
     dominant_plane_normals: list[NDArray[np.float64]]
     symmetry_planes: list[dict[str, NDArray[np.float64]]]
     part_class: PartClass
+    # Shortest OBB axis / middle axis extent ratio when classified prismatic (thin stock cue).
+    thickness_to_width_ratio: float | None = None
 
 
 def analyze_scene(cloud: SampledCloud) -> SceneAnalysis:
@@ -43,11 +45,14 @@ def analyze_scene(cloud: SampledCloud) -> SceneAnalysis:
     ex2 = float(sorted_extents[2]) if len(sorted_extents) > 2 else 0.0
 
     part_class = PartClass.UNKNOWN
+    thickness_to_width_ratio: float | None = None
     if ex0 > 1e-12:
         thin_plate = ex1 > 0.0 and (ex2 / ex1) < 0.15
         one_short_dim = (ex2 / ex0) < 0.35
         if thin_plate or one_short_dim:
             part_class = PartClass.PRISMATIC
+            if ex1 > 1e-12:
+                thickness_to_width_ratio = float(ex2 / ex1)
         elif ex1 > 0.0 and (ex1 / ex0) < 0.55 and (ex2 / ex0) < 0.55 and (ex1 / ex0) > 0.08:
             part_class = PartClass.ROTATIONAL
 
@@ -64,4 +69,5 @@ def analyze_scene(cloud: SampledCloud) -> SceneAnalysis:
         dominant_plane_normals=dominant_plane_normals,
         symmetry_planes=symmetry_planes,
         part_class=part_class,
+        thickness_to_width_ratio=thickness_to_width_ratio,
     )

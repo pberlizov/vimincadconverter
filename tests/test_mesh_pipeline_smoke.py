@@ -643,6 +643,72 @@ def test_infer_features_detects_cylindrical_boss():
     assert boss_features[0].start_offset == pytest.approx(0.0, abs=0.01)
 
 
+def test_infer_features_skips_boss_when_cylinder_confidence_is_low():
+    top_points = np.array(
+        [[x, y, 1.0] for x in (-5.0, 5.0) for y in (-3.0, 3.0)],
+        dtype=np.float64,
+    )
+    bottom_points = np.array(
+        [[x, y, -1.0] for x in (-5.0, 5.0) for y in (-3.0, 3.0)],
+        dtype=np.float64,
+    )
+    boss_points = []
+    boss_normals = []
+    for z_coord in np.linspace(1.0, 1.8, 6):
+        for angle in np.linspace(0.0, 2.0 * np.pi, 24, endpoint=False):
+            x_coord = 1.5 + (0.75 * np.cos(angle))
+            y_coord = -0.5 + (0.75 * np.sin(angle))
+            boss_points.append([x_coord, y_coord, z_coord])
+            boss_normals.append([np.cos(angle), np.sin(angle), 0.0])
+
+    points = np.vstack((top_points, bottom_points, np.asarray(boss_points, dtype=np.float64)))
+    normals = np.vstack(
+        (
+            np.tile(np.array([[0.0, 0.0, 1.0]]), (len(top_points), 1)),
+            np.tile(np.array([[0.0, 0.0, -1.0]]), (len(bottom_points), 1)),
+            np.asarray(boss_normals, dtype=np.float64),
+        )
+    )
+    cloud = SampledCloud(points=points, normals=normals, source_face_indices=None)
+    scene = analyze_scene(cloud)
+
+    top_indices = list(range(0, len(top_points)))
+    bottom_indices = list(range(len(top_points), len(top_points) + len(bottom_points)))
+    boss_indices = list(range(len(top_points) + len(bottom_points), len(points)))
+
+    top_plane = PlanePrimitive(
+        kind=PrimitiveKind.PLANE,
+        confidence=Confidence(score=0.95, reasons=[]),
+        region=PrimitiveRegion(point_indices=top_indices, area=60.0),
+        origin=np.array([0.0, 0.0, 1.0], dtype=np.float64),
+        normal=np.array([0.0, 0.0, 1.0], dtype=np.float64),
+    )
+    bottom_plane = PlanePrimitive(
+        kind=PrimitiveKind.PLANE,
+        confidence=Confidence(score=0.95, reasons=[]),
+        region=PrimitiveRegion(point_indices=bottom_indices, area=60.0),
+        origin=np.array([0.0, 0.0, -1.0], dtype=np.float64),
+        normal=np.array([0.0, 0.0, -1.0], dtype=np.float64),
+    )
+    weak_cylinder = CylinderPrimitive(
+        kind=PrimitiveKind.CYLINDER,
+        confidence=Confidence(score=0.18, reasons=["noisy fit"]),
+        region=PrimitiveRegion(point_indices=boss_indices, area=float(2.0 * np.pi * 0.75 * 0.8)),
+        axis_origin=np.array([1.5, -0.5, 1.0], dtype=np.float64),
+        axis_direction=np.array([0.0, 0.0, 1.0], dtype=np.float64),
+        radius=0.75,
+        height_estimate=0.8,
+    )
+
+    result = infer_features(
+        primitives=[top_plane, bottom_plane, weak_cylinder],
+        scene=scene,
+        cloud=cloud,
+        tolerances=ToleranceConfig(linear=0.1, angular_deg=2.0, min_region_area=1.0),
+    )
+    assert not any(isinstance(f, BossFeature) for f in result.features)
+
+
 def test_infer_features_detects_planar_pocket():
     outer_xy = [(x_coord, y_coord) for x_coord in np.linspace(-5.0, 5.0, 6) for y_coord in np.linspace(-3.0, 3.0, 4)]
     top_points = np.asarray([[x_coord, y_coord, 2.0] for x_coord, y_coord in outer_xy], dtype=np.float64)
@@ -2393,7 +2459,7 @@ def test_cli_outputs_json_payload(tmp_path):
             "--no-build",
             "--no-auto-tune",
             "--sample-count",
-            "900",
+            "1200",
         ],
         check=True,
         capture_output=True,
@@ -2402,9 +2468,10 @@ def test_cli_outputs_json_payload(tmp_path):
 
     payload = json.loads(completed.stdout)
     assert payload["source_path"].endswith("box.stl")
+    assert payload["build"] is not None
     assert payload["build"]["build_success"] is False
-    assert payload["debug"]["requested_sample_count"] == 900
-    assert payload["debug"]["effective_sample_count"] == 900
+    assert payload["debug"]["requested_sample_count"] == 1200
+    assert payload["debug"]["effective_sample_count"] == 1200
 
 
 @pytest.mark.skipif(
@@ -2467,7 +2534,7 @@ def test_ui_setup_login_and_job_flow(tmp_path, monkeypatch):
     with source.open("rb") as handle:
         job_response = client.post(
             "/jobs",
-            data={"sample_count": "900", "build": "on"},
+            data={"sample_count": "1200", "build": "on"},
             files={"source_file": ("box.stl", handle, "application/sla")},
             follow_redirects=False,
         )
@@ -2554,7 +2621,7 @@ def test_ui_job_status_endpoint_eventually_completes(tmp_path, monkeypatch):
     with source.open("rb") as handle:
         response = client.post(
             "/jobs",
-            data={"sample_count": "900"},
+            data={"sample_count": "1200"},
             files={"source_file": ("box.stl", handle, "application/sla")},
             follow_redirects=False,
         )
@@ -2587,7 +2654,7 @@ def test_http_async_process_submission_and_polling(tmp_path):
     client = TestClient(create_app())
     submit = client.post(
         "/process/submit",
-        json={"input_path": str(source), "build": False, "sample_count": 800},
+        json={"input_path": str(source), "build": False, "sample_count": 1200},
     )
     assert submit.status_code == 200
     job_id = submit.json()["job_id"]
@@ -2622,7 +2689,7 @@ def test_http_process_job_cancel_when_still_queued(tmp_path):
         json={
             "input_path": str(source),
             "build": False,
-            "sample_count": 800,
+            "sample_count": 1200,
             "auto_tune_sampling": False,
         },
     )
@@ -2648,7 +2715,7 @@ def test_http_async_process_retry_after_completion(tmp_path):
     client = TestClient(create_app())
     submit = client.post(
         "/process/submit",
-        json={"input_path": str(source), "build": False, "sample_count": 800},
+        json={"input_path": str(source), "build": False, "sample_count": 1200},
     )
     assert submit.status_code == 200
     job_id = submit.json()["job_id"]
@@ -2705,7 +2772,7 @@ def test_ui_job_retry_after_completion(tmp_path, monkeypatch):
     with source.open("rb") as handle:
         response = client.post(
             "/jobs",
-            data={"sample_count": "900"},
+            data={"sample_count": "1200"},
             files={"source_file": ("box.stl", handle, "application/sla")},
             follow_redirects=False,
         )

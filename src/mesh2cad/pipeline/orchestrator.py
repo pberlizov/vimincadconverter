@@ -88,6 +88,22 @@ def run_pipeline(
     else:
         raise TypeError(f"Unsupported geometry input: {type(geom)!r}")
 
+    scope_warnings: list[str] = []
+    try:
+        n_pre = len(loaded_mesh.mesh.split(only_watertight=False))
+    except Exception:
+        n_pre = 1
+    if n_pre > 1:
+        kept = (
+            "the largest surface-area body"
+            if repair_component_index is None
+            else f"body rank {repair_component_index} by descending surface area (0=largest)"
+        )
+        scope_warnings.append(
+            f"Input mesh contained {n_pre} disconnected components; analysis used {kept}. "
+            "Assembly mates, per-body feature trees, and relative positioning between bodies are not reconstructed."
+        )
+
     repaired_mesh = repair_mesh(loaded_mesh, component_index=repair_component_index)
     repair_note = (
         "Repair and largest-component selection"
@@ -141,6 +157,11 @@ def run_pipeline(
         cloud=cloud,
         tolerances=tolerances,
     )
+    if scope_warnings:
+        feature_result = FeatureInferenceResult(
+            features=feature_result.features,
+            warnings=[*scope_warnings, *feature_result.warnings],
+        )
     stages.append(
         PlanStage(
             "infer_prismatic_features",

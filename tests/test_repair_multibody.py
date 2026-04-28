@@ -39,3 +39,17 @@ def test_run_pipeline_respects_repair_component_index(tmp_path) -> None:
     r0 = run_pipeline(path, output_dir=None, sample_count=800, auto_tune_sampling=False, repair_component_index=0)
     r1 = run_pipeline(path, output_dir=None, sample_count=800, auto_tune_sampling=False, repair_component_index=1)
     assert r0.debug["primitive_support_counts"] != r1.debug["primitive_support_counts"]
+
+
+def test_run_pipeline_warns_when_input_has_multiple_bodies(tmp_path) -> None:
+    large = trimesh.creation.box(extents=(4.0, 4.0, 1.0))
+    small = trimesh.creation.box(extents=(1.0, 1.0, 1.0))
+    small.apply_translation([12.0, 0.0, 0.0])
+    combo = trimesh.util.concatenate([large, small])
+    combo.merge_vertices()
+    path = tmp_path / "multi.stl"
+    combo.export(path)
+
+    result = run_pipeline(path, output_dir=None, sample_count=600, auto_tune_sampling=False)
+    assert any("disconnected components" in w for w in result.warnings)
+    assert any("largest surface-area body" in w for w in result.warnings)

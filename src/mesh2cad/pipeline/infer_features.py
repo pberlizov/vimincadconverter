@@ -56,9 +56,8 @@ def infer_features(
     - optional secondary base extrusion when a smaller orthogonal stock patch is detected (multi-face tab/plate)
     - through-holes from cylinder primitives, including angled hole axes where the cylinder axis crosses the base stock faces
     - complemented rotational inference for strong cylinder-driven revolve solids
+    - bosses, tapered bosses, and planar pockets with conservative geometric gates (see ``SceneAnalysis`` hints)
     """
-    del scene
-
     plane_primitives = [primitive for primitive in primitives if isinstance(primitive, PlanePrimitive)]
     cylinder_primitives = [
         primitive for primitive in primitives if isinstance(primitive, CylinderPrimitive)
@@ -196,6 +195,15 @@ def infer_features(
     )
     if pockets:
         features.extend(pockets)
+
+    if (
+        scene.thickness_to_width_ratio is not None
+        and scene.thickness_to_width_ratio < 0.085
+    ):
+        warnings.append(
+            "Stock is extremely thin relative to in-plane extent; sheet-metal bends, unfold/flatten, "
+            "and dedicated sheet workflows are not modeled—only volumetric prismatic stock and cuts."
+        )
 
     return FeatureInferenceResult(features=features, warnings=warnings)
 
@@ -1286,6 +1294,28 @@ def _matches_any_hole_center(
     return False
 
 
+def _min_profile_xy_span(profile_loop: list[tuple[float, float]]) -> float:
+    if len(profile_loop) < 2:
+        return 1e-3
+    xs = [float(p[0]) for p in profile_loop]
+    ys = [float(p[1]) for p in profile_loop]
+    span_x = max(xs) - min(xs)
+    span_y = max(ys) - min(ys)
+    return max(min(span_x, span_y), 1e-6)
+
+
+def _planar_loop_aspect_ratio(loop: list[tuple[float, float]]) -> float:
+    if len(loop) < 2:
+        return 1.0
+    xs = [float(p[0]) for p in loop]
+    ys = [float(p[1]) for p in loop]
+    span_x = max(xs) - min(xs)
+    span_y = max(ys) - min(ys)
+    if span_x <= 1e-12 or span_y <= 1e-12:
+        return 10_000.0
+    return float(max(span_x, span_y) / min(span_x, span_y))
+
+
 def _deduplicate_blind_holes(
     holes: list[BlindHoleFeature],
     tolerances: ToleranceConfig,
@@ -1361,7 +1391,9 @@ def _infer_planar_pockets(
                 continue
 
             idx = sorted(set(p0.region.point_indices) | set(p1.region.point_indices))
-            if len(idx) < 4:
+            if len(idx) < 12:
+                continue
+            if min(p0.confidence.score, p1.confidence.score) < 0.38:
                 continue
             pts = np.asarray(cloud.points[idx], dtype=np.float64)
             local_x = (pts - origin) @ basis_x
@@ -1369,6 +1401,8 @@ def _infer_planar_pockets(
             try:
                 loop_2d = _convex_profile_loop(np.column_stack((local_x, local_y)))
             except Exception:
+                continue
+            if _planar_loop_aspect_ratio(loop_2d) > 24.0:
                 continue
             pocket_area = abs(_signed_polygon_area(loop_2d))
             if pocket_area > profile_area * 0.55 or pocket_area < tolerances.min_region_area * 0.08:
@@ -1383,8 +1417,9 @@ def _infer_planar_pockets(
                 continue
 
             pocket_depth = float(min(gap * 1.04 + tolerances.linear, depth * 0.9))
+            plane_conf = min(p0.confidence.score, p1.confidence.score)
             confidence = Confidence(
-                score=0.62,
+                score=float(min(0.88, 0.52 + 0.42 * plane_conf)),
                 reasons=[
                     "interior parallel pocket faces",
                     f"pocket_depth {pocket_depth:.4f}",
@@ -1420,15 +1455,24 @@ def _infer_bosses(
     basis_y = np.asarray(base_extrude.sketch_plane["y_dir"], dtype=np.float64)
     origin = np.asarray(base_extrude.sketch_plane["origin"], dtype=np.float64)
     max_height = max(base_extrude.depth * _THROUGH_CYLINDER_MIN_DEPTH_RATIO, tolerances.linear * 3.0)
+    profile_min_span = _min_profile_xy_span(base_extrude.profile_loops[0])
+    max_boss_radius = 0.48 * profile_min_span
+    min_boss_height = max(tolerances.linear * 2.0, float(base_extrude.depth) * 0.018)
 
     bosses: list[BossFeature] = []
     for cylinder in cylinder_primitives:
         alignment = abs(float(np.dot(cylinder.axis_direction, extrusion_axis)))
         if alignment < math.cos(math.radians(tolerances.angular_deg * 2.0)):
             continue
+        if cylinder.confidence.score < 0.34:
+            continue
         if cylinder.height_estimate is None:
             continue
         if cylinder.height_estimate >= max_height:
+            continue
+        if float(cylinder.height_estimate) < min_boss_height:
+            continue
+        if cylinder.radius > max_boss_radius:
             continue
 
         offset = np.asarray(cylinder.axis_origin, dtype=np.float64) - origin
@@ -1497,11 +1541,17 @@ def _infer_tapered_bosses(
     origin = np.asarray(base_extrude.sketch_plane["origin"], dtype=np.float64)
     depth = float(base_extrude.depth)
     face_tol = max(tolerances.linear * 3.0, depth * 0.08)
+    profile_min_span = _min_profile_xy_span(base_extrude.profile_loops[0])
+    max_boss_radius = 0.48 * profile_min_span
     bosses: list[TaperedBossFeature] = []
 
     for cone in cone_primitives:
         alignment = abs(float(np.dot(cone.axis_direction, extrusion_axis)))
         if alignment < math.cos(math.radians(tolerances.angular_deg * 2.5)):
+            continue
+        if cone.confidence.score < 0.32:
+            continue
+        if cone.base_radius > max_boss_radius:
             continue
         if cone.height_estimate is None or cone.height_estimate <= tolerances.linear * 2.0:
             continue
@@ -1908,7 +1958,7 @@ def _point_in_polygon(
         x1, y1 = start_point
         x2, y2 = end_point
         intersects = ((y1 > y_coord) != (y2 > y_coord)) and (
-            x_coord < ((x2 - x1) * (y_coord - y1) / max(y2 - y1, 1e-12)) + x1
+            x_coord < ((x2 - x1) * (y_coord - y1) / (y2 - y1)) + x1
         )
         if intersects:
             inside = not inside
