@@ -4,20 +4,6 @@
 
 The installable Python package and CLI entry points keep the name **`mesh2cad`** (import `mesh2cad`, commands `mesh2cad`, `mesh2cad-api`, `mesh2cad-ui`).
 
-### GitHub discoverability (maintainers)
-
-GitHub does not read these from a file: set **About → Description**, **Website**, and **Topics** on the repository.
-
-**Suggested short description** (copy into *Repository → About → Description*):
-
-> Turn STL/OBJ/PLY meshes or point clouds into build123d Python + optional STEP/STL. CLI, FastAPI, Gradio UI, Redis/RQ jobs, Docker/K8s. MIT.
-
-**Suggested website URL:** `https://github.com/pberlizov/ViminCADConverter#readme` (or your docs site if you add one later).
-
-**Suggested topics** (add under *About → ⚙️ → Topics*; GitHub allows many—pick what fits):
-
-`cad`, `mesh`, `reverse-engineering`, `stl`, `step`, `build123d`, `parametric-design`, `python`, `fastapi`, `trimesh`, `point-cloud`, `3d-printing`, `computational-geometry`, `mesh-processing`, `docker`, `kubernetes`, `openapi`, `gradio`, `rq`, `redis`
-
 Scope today:
 
 - **Prismatic route**: paired parallel planes → base extrusion profile (convex or simple concave), with support for:
@@ -248,27 +234,3 @@ pytest -q
 ```
 
 CI (`.github/workflows/ci.yml`) runs the main suite on Python **3.11** and **3.12** with `pip install -e ".[dev,api]"`, and a separate job installs **build123d** to exercise validation tests that require it.
-
-## Publish to GitHub (you run these locally)
-
-This environment cannot sign in to your GitHub account. After creating an empty repository named **`ViminCADConverter`** on GitHub (same spelling as the title you want):
-
-```bash
-cd /path/to/CADConverterVimin   # or wherever you keep this tree
-git remote add origin https://github.com/YOUR_USERNAME/ViminCADConverter.git
-git branch -M main
-git push -u origin main
-```
-
-If the repo is not initialized yet:
-
-```bash
-git init
-git add .
-git commit -m "Initial commit: ViminCADConverter"
-git remote add origin https://github.com/YOUR_USERNAME/ViminCADConverter.git
-git branch -M main
-git push -u origin main
-```
-
-Replace `YOUR_USERNAME` with your GitHub user or organization. If you use SSH, use `git@github.com:YOUR_USERNAME/ViminCADConverter.git` instead.
