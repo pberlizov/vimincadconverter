@@ -12,6 +12,19 @@ license = { text = "MIT" }
 authors = [
   { name = "Vimin Labs, Inc." }
 ]
+keywords = [
+  "cad",
+  "mesh",
+  "reverse-engineering",
+  "stl",
+  "step",
+  "build123d",
+  "parametric",
+  "point-cloud",
+  "trimesh",
+  "fastapi",
+  "3d",
+]
 dependencies = [
   "numpy>=1.26",
   "trimesh>=4.4",
@@ -59,6 +72,12 @@ queue = [
 open3d = [
   "open3d>=0.19",
 ]
+
+[project.urls]
+Homepage = "https://github.com/pberlizov/ViminCADConverter"
+Documentation = "https://github.com/pberlizov/ViminCADConverter#readme"
+Repository = "https://github.com/pberlizov/ViminCADConverter"
+Issues = "https://github.com/pberlizov/ViminCADConverter/issues"
 
 [project.scripts]
 mesh2cad = "mesh2cad.main:main"

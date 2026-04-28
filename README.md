@@ -1,8 +1,22 @@
 # ViminCADConverter
 
-**ViminCADConverter** is a **Python toolkit and optional web UI** for turning **triangle meshes** (STL/OBJ/PLY) or **dense point clouds** (`.xyz`, `.pts`, `.csv`, `.npy`, and point-only `.ply` fallbacks) into a **small parametric CAD program** (currently **build123d**), with optional **STEP** and preview **STL** export when `build123d` is installed.
+**Mesh / point cloud → parametric CAD:** turn **STL, OBJ, PLY** meshes or **`.xyz` / `.pts` / `.csv` / `.npy`** point clouds into a runnable **Python + [build123d](https://github.com/gumyr/build123d)** script, with optional **STEP** and preview **STL** when `build123d` is installed. Includes **CLI**, **FastAPI** (`mesh2cad-api`), **Gradio UI** (`mesh2cad-ui`), optional **Redis + RQ** workers, and **Docker / Kubernetes** examples.
 
 The installable Python package and CLI entry points keep the name **`mesh2cad`** (import `mesh2cad`, commands `mesh2cad`, `mesh2cad-api`, `mesh2cad-ui`).
+
+### GitHub discoverability (maintainers)
+
+GitHub does not read these from a file: set **About → Description**, **Website**, and **Topics** on the repository.
+
+**Suggested short description** (copy into *Repository → About → Description*):
+
+> Turn STL/OBJ/PLY meshes or point clouds into build123d Python + optional STEP/STL. CLI, FastAPI, Gradio UI, Redis/RQ jobs, Docker/K8s. MIT.
+
+**Suggested website URL:** `https://github.com/pberlizov/ViminCADConverter#readme` (or your docs site if you add one later).
+
+**Suggested topics** (add under *About → ⚙️ → Topics*; GitHub allows many—pick what fits):
+
+`cad`, `mesh`, `reverse-engineering`, `stl`, `step`, `build123d`, `parametric-design`, `python`, `fastapi`, `trimesh`, `point-cloud`, `3d-printing`, `computational-geometry`, `mesh-processing`, `docker`, `kubernetes`, `openapi`, `gradio`, `rq`, `redis`
 
 Scope today:
 
