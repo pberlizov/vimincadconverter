@@ -6,17 +6,7 @@ The installable Python package and CLI entry points keep the name **`mesh2cad`**
 
 ### GitHub discoverability (maintainers)
 
-GitHub does not read metadata from the repo files. **One-shot automation** (run locally; never commit tokens):
-
-```bash
-# After: gh auth login   OR   export GITHUB_TOKEN=…  (classic: repo scope; fine-grained: Administration write)
-python3 scripts/set_github_repo_metadata.py
-python3 scripts/set_github_repo_metadata.py --dry-run   # preview only
-```
-
-The script reads `owner/repo` from `git remote origin`, then sets description, homepage, and topics via the REST API. Override defaults with `--help`.
-
-**Manual fallback** — same strings as the script defaults:
+GitHub does not read these from a file: set **About → Description**, **Website**, and **Topics** on the repository.
 
 **Suggested short description** (copy into *Repository → About → Description*):
 
