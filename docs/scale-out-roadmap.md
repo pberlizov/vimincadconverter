@@ -7,6 +7,7 @@ This document orders the remaining work to run **multiple API replicas**, **dura
 - **Docker** images (`:latest`, `:cad`) and **GHCR** publish workflow.
 - **Redis + RQ** for async mesh jobs with **shared `MESH2CAD_STATE_DIR`** (WAL SQLite, cancel semantics preserved).
 - **`GET /ready`** pings **Redis** when **`MESH2CAD_JOB_BACKEND=rq`**.
+- **Kubernetes (`deploy/k8s/`)** — Kustomize stack with in-cluster Redis, **combined API + RQ worker Pod** (RWO-safe), optional Ingress example, and a thread-only Deployment variant.
 - **Redis-backed rate limits** (`MESH2CAD_RATE_LIMIT_BACKEND=redis` + `MESH2CAD_REDIS_URL`) for consistent POST throttling across replicas.
 - **Optional Open3D** for large point-cloud **normal estimation** (`MESH2CAD_USE_OPEN3D_CLOUD`).
 

@@ -1,0 +1,58 @@
+# In-cluster Redis for RQ and optional shared rate limits.
+# For production, prefer a managed Redis and point MESH2CAD_REDIS_URL at it instead.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mesh2cad-redis
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mesh2cad-redis
+  template:
+    metadata:
+      labels:
+        app: mesh2cad-redis
+    spec:
+      securityContext:
+        runAsUser: 999
+        runAsNonRoot: true
+        fsGroup: 999
+      containers:
+        - name: redis
+          image: redis:7-alpine
+          imagePullPolicy: IfNotPresent
+          args: ["redis-server", "--save", "60", "1", "--loglevel", "warning"]
+          ports:
+            - containerPort: 6379
+              name: redis
+          resources:
+            requests:
+              cpu: "50m"
+              memory: 128Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+          livenessProbe:
+            tcpSocket:
+              port: redis
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          readinessProbe:
+            exec:
+              command: ["redis-cli", "ping"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mesh2cad-redis
+spec:
+  type: ClusterIP
+  selector:
+    app: mesh2cad-redis
+  ports:
+    - port: 6379
+      targetPort: redis
+      name: redis

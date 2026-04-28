@@ -1,5 +1,8 @@
-# Optional: scale with `kubectl scale deployment mesh2cad-rq-worker --replicas=N`
-# Requires Redis and the same state volume as the API (ReadWriteMany or single worker + one API).
+# Optional: separate worker Pods (scale with `kubectl scale deployment mesh2cad-rq-worker --replicas=N`).
+# Requires Redis and a volume the API and every worker can mount at the same time.
+# ReadWriteOnce PVCs attach to ONE Pod only — use deployment-api.yaml (API+worker in one Pod)
+# or switch to ReadWriteMany / NFS. Do not apply this together with deployment-api.yaml
+# unless you use distinct PVCs and know what you are doing.
 apiVersion: apps/v1
 kind: Deployment
 metadata:

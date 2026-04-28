@@ -6,6 +6,7 @@
 - **How often:** at least daily for busy instances; align retention with **`mesh2cad-purge-jobs`** (see README).
 - **Script:** from the repo root, `bash scripts/backup-mesh2cad-state.sh /path/to/backup.tar.gz` (requires `MESH2CAD_STATE_DIR` in the environment).
 - **Restore:** stop the API and workers, restore the directory onto a clean host with the same path (or update `MESH2CAD_STATE_DIR`), then start services. Verify **`GET /ready`** and spot-check a known job id in SQLite if you need consistency guarantees.
+- **Kubernetes + RWO:** a second Pod cannot mount the same volume while the API runs. Prefer **volume snapshots** (cloud CSI) or stream a tarball from the API container (default state dir **`/data/state`**): `kubectl exec deploy/mesh2cad-api -c api -- tar -C /data -czf - state > mesh2cad-state-backup.tgz`
 
 ## Redis + RQ workers
 
@@ -13,6 +14,7 @@
 - **Configuration:** set **`MESH2CAD_JOB_BACKEND=rq`**, **`MESH2CAD_REDIS_URL`** (e.g. `redis://redis:6379/0`), and optionally **`MESH2CAD_RQ_QUEUE`** (default `mesh2cad`). Install **`[queue]`** (included in the default Docker image extras).
 - **Run a worker:** **`mesh2cad-rq-worker`** (same image and env as the API, including `MESH2CAD_STATE_DIR`).
 - **Compose:** `docker compose -f docker-compose.yml -f docker-compose.queue.yml up -d` starts Redis, switches the API to RQ mode, and runs one worker. Adjust replicas by duplicating the `rq-worker` service or using an orchestrator.
+- **Kubernetes:** use **`kubectl apply -k deploy/k8s`** for the bundled stack (Redis + **one Pod** with API and worker sharing the PVC). A **ReadWriteOnce** PVC cannot mount on two Pods at once; do not apply separate API and worker Deployments against the same RWO claim unless your storage class is **ReadWriteMany**. See **`deploy/k8s/README.md`**.
 - **Cancelling jobs:** queued RQ jobs are removed via **`job.cancel()`**; running jobs still rely on the on-disk **cancel marker** and subprocess termination (same as the in-process thread pool).
 
 ## SQLite concurrency

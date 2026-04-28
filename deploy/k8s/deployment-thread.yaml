@@ -1,0 +1,63 @@
+# In-process jobs (MESH2CAD_JOB_BACKEND defaults to thread). No Redis required.
+# Apply with pvc.yaml + service-api.yaml. Do not use together with deployment-api.yaml
+# (same Deployment name mesh2cad-api) unless you replace one with the other explicitly.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mesh2cad-api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mesh2cad-api
+  template:
+    metadata:
+      labels:
+        app: mesh2cad-api
+    spec:
+      securityContext:
+        runAsUser: 1000
+        runAsNonRoot: true
+        fsGroup: 1000
+      containers:
+        - name: api
+          image: ghcr.io/example/vimincadconverter:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8000
+              name: http
+          env:
+            - name: MESH2CAD_STATE_DIR
+              value: /data/state
+            - name: MESH2CAD_BIND_HOST
+              value: "0.0.0.0"
+            - name: MESH2CAD_BIND_PORT
+              value: "8000"
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 45
+            periodSeconds: 30
+            timeoutSeconds: 5
+          resources:
+            requests:
+              cpu: "250m"
+              memory: 512Mi
+            limits:
+              cpu: "2"
+              memory: 2Gi
+          volumeMounts:
+            - name: state
+              mountPath: /data/state
+      volumes:
+        - name: state
+          persistentVolumeClaim:
+            claimName: mesh2cad-state

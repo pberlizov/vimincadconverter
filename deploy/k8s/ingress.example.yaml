@@ -1,0 +1,20 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: mesh2cad-api
+  annotations:
+    mesh2cad.example/readme: >-
+      Copy to ingress.yaml, replace REPLACE.example.com, add TLS/cert-manager annotations, apply.
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: REPLACE.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: mesh2cad-api
+                port:
+                  number: 8000

@@ -17,7 +17,7 @@ The API listens on port **8000** by default (`MESH2CAD_HOST_PORT` overrides the 
 2. **TLS** at the reverse proxy; set **`MESH2CAD_SECURE_COOKIES=true`** for the UI.
 3. **`MESH2CAD_API_KEYS`** for `/v1` in any untrusted network.
 4. **Backups:** `scripts/backup-mesh2cad-state.sh` and retention via **`mesh2cad-purge-jobs`** (see **`docs/operations.md`**).
-5. **Jobs at scale:** `docker-compose.queue.yml` + Redis, or Kubernetes **`deploy/k8s/`** with one writer to SQLite unless you follow **`docs/scale-out-roadmap.md`**.
+5. **Jobs at scale:** `docker-compose.queue.yml` + Redis, or Kubernetes **`kubectl apply -k deploy/k8s`** (Redis + API and RQ worker in **one Pod** so a **ReadWriteOnce** PVC is valid). See **`deploy/k8s/README.md`**; multi-Pod + one SQLite file needs **ReadWriteMany** or the roadmap phases.
 6. **Images:** pull **`ghcr.io/<owner>/<repo>:latest`** (API) or **`:cad`** for in-container STEP export; CI publishes on push to default branch.
 
 ## Image variants
@@ -61,4 +61,4 @@ Validation can use Open3D’s raycasting scene for point-to-mesh distances when 
 
 - **[docs/operations.md](operations.md)** — backups, GHCR tags, graceful shutdown, RQ operations, Redis rate limits.
 - **[docs/scale-out-roadmap.md](scale-out-roadmap.md)** — Postgres, object storage, multi-replica phases.
-- **`deploy/k8s/`** — starter Kubernetes Deployment + PVC + Service.
+- **`deploy/k8s/`** — Kustomize bundle (PVC, Redis, combined API/worker Deployment, Service) plus thread-only and Ingress examples.

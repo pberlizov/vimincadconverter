@@ -1,9 +1,15 @@
+# Production-style stack: API + RQ worker in one Pod so a ReadWriteOnce PVC can be
+# shared safely (same node, one volume attachment). Requires mesh2cad-redis Service.
+# For thread-only (no Redis), use deployment-thread.yaml instead (same Deployment name;
+# apply one or the other, never both).
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: mesh2cad-api
 spec:
   replicas: 1
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: mesh2cad-api
@@ -16,6 +22,17 @@ spec:
         runAsUser: 1000
         runAsNonRoot: true
         fsGroup: 1000
+      initContainers:
+        - name: wait-redis
+          image: redis:7-alpine
+          imagePullPolicy: IfNotPresent
+          command:
+            - sh
+            - -c
+            - |
+              until redis-cli -h mesh2cad-redis ping | grep -q PONG; do
+                echo waiting for redis; sleep 2;
+              done
       containers:
         - name: api
           image: ghcr.io/example/vimincadconverter:latest
@@ -30,12 +47,27 @@ spec:
               value: "0.0.0.0"
             - name: MESH2CAD_BIND_PORT
               value: "8000"
+            - name: MESH2CAD_JOB_BACKEND
+              value: rq
+            - name: MESH2CAD_REDIS_URL
+              value: redis://mesh2cad-redis:6379/0
+            - name: MESH2CAD_RQ_QUEUE
+              value: mesh2cad
+            - name: MESH2CAD_RATE_LIMIT_BACKEND
+              value: redis
           readinessProbe:
             httpGet:
               path: /ready
               port: http
-            initialDelaySeconds: 15
+            initialDelaySeconds: 20
             periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 45
+            periodSeconds: 30
             timeoutSeconds: 5
           resources:
             requests:
@@ -44,6 +76,27 @@ spec:
             limits:
               cpu: "2"
               memory: 2Gi
+          volumeMounts:
+            - name: state
+              mountPath: /data/state
+        - name: rq-worker
+          image: ghcr.io/example/vimincadconverter:latest
+          imagePullPolicy: IfNotPresent
+          command: ["mesh2cad-rq-worker"]
+          env:
+            - name: MESH2CAD_STATE_DIR
+              value: /data/state
+            - name: MESH2CAD_REDIS_URL
+              value: redis://mesh2cad-redis:6379/0
+            - name: MESH2CAD_RQ_QUEUE
+              value: mesh2cad
+          resources:
+            requests:
+              cpu: "500m"
+              memory: 1Gi
+            limits:
+              cpu: "4"
+              memory: 8Gi
           volumeMounts:
             - name: state
               mountPath: /data/state
