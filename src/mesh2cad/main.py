@@ -37,6 +37,12 @@ def main() -> None:
     )
     parser.add_argument("--icp-iterations", type=int, default=10)
     parser.add_argument("--icp-seed", type=int, default=0)
+    parser.add_argument(
+        "--repair-component-index",
+        type=int,
+        default=None,
+        help="When the input mesh has multiple bodies, analyze the N-th largest component (0=default).",
+    )
     args = parser.parse_args()
 
     result = process_mesh(
@@ -49,6 +55,7 @@ def main() -> None:
         align_surface_metrics=not args.no_align_surface_metrics,
         icp_iterations=args.icp_iterations,
         icp_seed=args.icp_seed,
+        repair_component_index=args.repair_component_index,
     )
     print(json.dumps(result, indent=2, default=str))
 

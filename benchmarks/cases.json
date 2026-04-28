@@ -96,6 +96,49 @@
     }
   },
   {
+    "name": "side_tab_plate_multiface_prismatic",
+    "generator": "side_tab_plate",
+    "sample_count": 4500,
+    "expect_route": "prismatic_extrude",
+    "expect_warning_substr": "Multiple base extrusions",
+    "min_feature_kind_counts": {
+      "base_extrude": 2
+    }
+  },
+  {
+    "name": "point_cloud_cylinder_revolve",
+    "generator": "point_cloud_cylinder",
+    "radius": 2.0,
+    "height": 8.0,
+    "point_count": 5000,
+    "sample_count": 3500,
+    "expect_route": "revolve_simple",
+    "min_feature_kind_counts": {
+      "revolve": 1
+    }
+  },
+  {
+    "name": "fixture_noisy_plate_prismatic",
+    "generator": "fixture_file",
+    "fixture": "noisy_plate.stl",
+    "sample_count": 2500,
+    "expect_route": "prismatic_extrude",
+    "min_feature_kind_counts": {
+      "base_extrude": 1
+    }
+  },
+  {
+    "name": "multibody_second_component_box",
+    "generator": "two_boxes_mesh",
+    "small_extents": [5.0, 5.0, 5.0],
+    "repair_component_index": 1,
+    "sample_count": 2500,
+    "expect_route": "prismatic_extrude",
+    "min_feature_kind_counts": {
+      "base_extrude": 1
+    }
+  },
+  {
     "name": "two_hole_plate_prismatic_through_holes",
     "generator": "build123d_two_hole_plate",
     "scale": 1.0,

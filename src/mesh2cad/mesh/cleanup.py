@@ -8,8 +8,13 @@ import trimesh
 from mesh2cad.mesh.io import MeshData
 
 
-def repair_mesh(mesh_data: MeshData) -> MeshData:
-    """Apply conservative repairs that help downstream analysis without reshaping parts."""
+def repair_mesh(mesh_data: MeshData, *, component_index: int | None = None) -> MeshData:
+    """Apply conservative repairs that help downstream analysis without reshaping parts.
+
+    When the mesh has multiple connected components, the largest component by surface area
+    is kept by default. Pass ``component_index`` to keep the N-th largest instead (0-based),
+    which is useful for multi-body STEP/STL imports where a smaller body should be analyzed.
+    """
     mesh = mesh_data.mesh.copy()
 
     mesh.remove_unreferenced_vertices()
@@ -25,9 +30,13 @@ def repair_mesh(mesh_data: MeshData) -> MeshData:
     mesh.remove_infinite_values()
     mesh.process(validate=True)
 
-    if len(mesh.split(only_watertight=False)) > 1:
-        components = mesh.split(only_watertight=False)
-        mesh = max(components, key=lambda comp: comp.area)
+    components = mesh.split(only_watertight=False)
+    if len(components) > 1:
+        ranked = sorted(components, key=lambda comp: comp.area, reverse=True)
+        idx = 0 if component_index is None else int(component_index)
+        if idx < 0 or idx >= len(ranked):
+            idx = 0
+        mesh = ranked[idx]
 
     trimesh.repair.fix_normals(mesh, multibody=True)
     trimesh.repair.fix_inversion(mesh, multibody=True)

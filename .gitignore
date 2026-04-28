@@ -15,5 +15,6 @@ htmlcov/
 .venv-bench/
 venv/
 *.stl
+!benchmarks/fixtures/*.stl
 *.step
 .DS_Store

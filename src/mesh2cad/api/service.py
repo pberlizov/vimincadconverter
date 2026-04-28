@@ -24,6 +24,7 @@ def process_mesh(
     icp_seed: int = 0,
     include_script: bool = True,
     icp_hybrid_hull_weight: float | None = None,
+    repair_component_index: int | None = None,
 ) -> dict[str, Any]:
     """API-oriented entrypoint that returns a JSON-friendly response payload."""
     result = run_pipeline(
@@ -37,6 +38,7 @@ def process_mesh(
         icp_iterations=icp_iterations,
         icp_seed=icp_seed,
         icp_hybrid_hull_weight=icp_hybrid_hull_weight,
+        repair_component_index=repair_component_index,
     )
     return pipeline_result_to_dict(result, include_script=include_script)
 

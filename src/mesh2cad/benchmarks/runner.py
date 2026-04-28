@@ -18,6 +18,10 @@ def default_cases_path() -> Path:
     return Path(__file__).resolve().parents[3] / "benchmarks" / "cases.json"
 
 
+def _fixtures_dir() -> Path:
+    return Path(__file__).resolve().parents[3] / "benchmarks" / "fixtures"
+
+
 def load_cases(path: Path | None = None) -> list[dict[str, Any]]:
     catalog = path or default_cases_path()
     raw = json.loads(catalog.read_text(encoding="utf-8"))
@@ -60,6 +64,31 @@ def _make_input_mesh_path(case: dict[str, Any], tmp_dir: Path) -> Path:
         path = tmp_dir / f"{case['name']}.xyz"
         np.savetxt(path, pts, fmt="%.6f")
         return path
+    if generator == "point_cloud_cylinder":
+        cyl = trimesh.creation.cylinder(
+            radius=float(case["radius"]),
+            height=float(case["height"]),
+            sections=int(case.get("sections", 64)),
+        )
+        n = int(case.get("point_count", 5000))
+        pts, _ = trimesh.sample.sample_surface(cyl, n)
+        pts = np.asarray(pts, dtype=np.float64)
+        noise = float(case.get("point_noise_std", 0.0))
+        if noise > 0.0:
+            seed = int(case.get("noise_seed", 0)) & 0xFFFF_FFFF
+            rng = np.random.default_rng(seed)
+            pts = pts + rng.normal(0.0, noise, size=pts.shape)
+        path = tmp_dir / f"{case['name']}.xyz"
+        np.savetxt(path, pts, fmt="%.6f")
+        return path
+    if generator == "fixture_file":
+        rel = str(case["fixture"])
+        src = _fixtures_dir() / rel
+        if not src.is_file():
+            raise RuntimeError(f"Missing fixture file for case {case['name']!r}: {src}")
+        dest = tmp_dir / f"{case['name']}_{src.name}"
+        dest.write_bytes(src.read_bytes())
+        return dest
     mesh = _make_mesh(case)
     path = tmp_dir / f"{case['name']}.stl"
     mesh.export(path)
@@ -91,8 +120,32 @@ def _make_mesh(case: dict[str, Any]) -> trimesh.Trimesh:
             subdivisions=int(case.get("subdivisions", 2)),
             radius=float(case["radius"]),
         )
-    if generator == "build123d_two_hole_plate":
-        raise ValueError("build123d_two_hole_plate is handled in _make_input_mesh_path, not _make_mesh.")
+    if generator == "side_tab_plate":
+        main_ext = tuple(float(x) for x in case.get("main_extents", [12.0, 8.0, 2.0]))
+        tab_ext = tuple(float(x) for x in case.get("tab_extents", [3.0, 2.5, 3.5]))
+        main = trimesh.creation.box(extents=main_ext)
+        tab = trimesh.creation.box(extents=tab_ext)
+        ey = float(case.get("tab_offset_y", main_ext[1] * 0.5 + tab_ext[1] * 0.5))
+        tab.apply_translation(
+            (
+                float(case.get("tab_offset_x", 0.0)),
+                ey,
+                float(case.get("tab_offset_z", 0.0)),
+            )
+        )
+        combo = trimesh.util.concatenate([main, tab])
+        combo.merge_vertices()
+        return combo
+    if generator == "two_boxes_mesh":
+        large = trimesh.creation.box(extents=tuple(float(x) for x in case.get("large_extents", [8.0, 8.0, 8.0])))
+        small = trimesh.creation.box(extents=tuple(float(x) for x in case.get("small_extents", [1.5, 1.5, 1.5])))
+        gap = float(case.get("body_gap", 15.0))
+        small.apply_translation([gap, 0.0, 0.0])
+        combo = trimesh.util.concatenate([large, small])
+        combo.merge_vertices()
+        return combo
+    if generator in {"point_cloud_box", "point_cloud_cylinder", "fixture_file", "build123d_two_hole_plate"}:
+        raise ValueError(f"Generator {generator!r} is handled in _make_input_mesh_path, not _make_mesh.")
     raise ValueError(f"Unknown generator: {generator!r}")
 
 
@@ -108,12 +161,15 @@ def run_case(case: dict[str, Any], *, tmp_dir: Path, auto_tune: bool = True) -> 
         kwargs = {k: raw_tol[k] for k in allowed if k in raw_tol}
         if kwargs:
             tolerances = ToleranceConfig(**kwargs)
+    ri = case.get("repair_component_index")
+    repair_idx = int(ri) if ri is not None else None
     return run_pipeline(
         path,
         output_dir=output_dir,
         sample_count=int(case.get("sample_count", 3000)),
         auto_tune_sampling=auto_tune,
         tolerances=tolerances,
+        repair_component_index=repair_idx,
     )
 
 

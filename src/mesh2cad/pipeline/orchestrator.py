@@ -55,6 +55,7 @@ def run_pipeline(
     icp_iterations: int = 10,
     icp_seed: int = 0,
     icp_hybrid_hull_weight: float | None = None,
+    repair_component_index: int | None = None,
 ) -> PipelineResult:
     """Run the supported mesh-to-CAD pipeline from file input to synthesis output."""
     tolerances = tolerances or ToleranceConfig()
@@ -87,8 +88,13 @@ def run_pipeline(
     else:
         raise TypeError(f"Unsupported geometry input: {type(geom)!r}")
 
-    repaired_mesh = repair_mesh(loaded_mesh)
-    stages.append(PlanStage("repair_mesh", True, "Repair and largest-component selection"))
+    repaired_mesh = repair_mesh(loaded_mesh, component_index=repair_component_index)
+    repair_note = (
+        "Repair and largest-component selection"
+        if repair_component_index is None
+        else f"Repair; multi-body component index {repair_component_index}"
+    )
+    stages.append(PlanStage("repair_mesh", True, repair_note))
 
     working_mesh = repaired_mesh
     if simplify_target_faces is not None:

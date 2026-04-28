@@ -17,6 +17,7 @@ from mesh2cad.domain.features import (
     PocketFeature,
     SphericalBossFeature,
     SphericalCavityFeature,
+    TaperedBossFeature,
     ThroughHoleFeature,
 )
 
@@ -52,6 +53,7 @@ def infer_features(
 
     Currently supported feature inference includes:
     - base extrusion from paired parallel planes
+    - optional secondary base extrusion when a smaller orthogonal stock patch is detected (multi-face tab/plate)
     - through-holes from cylinder primitives, including angled hole axes where the cylinder axis crosses the base stock faces
     - complemented rotational inference for strong cylinder-driven revolve solids
     """
@@ -73,6 +75,12 @@ def infer_features(
         return FeatureInferenceResult(features=features, warnings=warnings)
 
     features.append(base_extrude)
+
+    secondary_base = _infer_secondary_base_extrude(
+        plane_primitives, cloud, tolerances, base_extrude
+    )
+    if secondary_base is not None:
+        features.append(secondary_base)
 
     through_holes = _infer_through_holes(
         cylinder_primitives=cylinder_primitives,
@@ -119,6 +127,25 @@ def infer_features(
     if blind_holes:
         features.extend(blind_holes)
 
+    tapered_blind_stacks = _infer_tapered_blind_hole_stacks(
+        cone_primitives=cone_primitives,
+        blind_holes=blind_holes,
+        base_extrude=base_extrude,
+        cloud=cloud,
+        tolerances=tolerances,
+    )
+    if tapered_blind_stacks:
+        features.extend(tapered_blind_stacks)
+
+    counterbore_stacks = _infer_counterbore_stacks(
+        cylinder_primitives=cylinder_primitives,
+        base_extrude=base_extrude,
+        through_holes=remaining_through_holes,
+        tolerances=tolerances,
+    )
+    if counterbore_stacks:
+        features.extend(counterbore_stacks)
+
     hole_stacks = _compose_hole_stacks(
         base_extrude=base_extrude,
         through_holes=through_holes,
@@ -141,6 +168,16 @@ def infer_features(
     if bosses:
         features.extend(bosses)
 
+    tapered_bosses = _infer_tapered_bosses(
+        cone_primitives=cone_primitives,
+        base_extrude=base_extrude,
+        cloud=cloud,
+        tolerances=tolerances,
+        reserved_hole_centers=reserved_centers,
+    )
+    if tapered_bosses:
+        features.extend(tapered_bosses)
+
     spherical_bosses, spherical_cavities = _infer_spherical_modifiers(
         sphere_primitives=sphere_primitives,
         base_extrude=base_extrude,
@@ -161,6 +198,261 @@ def infer_features(
         features.extend(pockets)
 
     return FeatureInferenceResult(features=features, warnings=warnings)
+
+
+def _infer_tapered_blind_hole_stacks(
+    *,
+    cone_primitives: list[ConePrimitive],
+    blind_holes: list[BlindHoleFeature],
+    base_extrude: BaseExtrudeFeature,
+    cloud: SampledCloud,
+    tolerances: ToleranceConfig,
+) -> list[HoleStackFeature]:
+    if not cone_primitives or not blind_holes:
+        return []
+
+    extrusion_axis = np.asarray(base_extrude.sketch_plane["z_dir"], dtype=np.float64)
+    basis_x = np.asarray(base_extrude.sketch_plane["x_dir"], dtype=np.float64)
+    basis_y = np.asarray(base_extrude.sketch_plane["y_dir"], dtype=np.float64)
+    origin = np.asarray(base_extrude.sketch_plane["origin"], dtype=np.float64)
+    depth = float(base_extrude.depth)
+    stacks: list[HoleStackFeature] = []
+
+    for cone in cone_primitives:
+        alignment = abs(float(np.dot(cone.axis_direction, extrusion_axis)))
+        if alignment < math.cos(math.radians(tolerances.angular_deg * 2.5)):
+            continue
+        if cone.height_estimate is None or cone.height_estimate <= tolerances.linear * 2.0:
+            continue
+
+        support_points = np.asarray(cloud.points[cone.region.point_indices], dtype=np.float64)
+        if len(support_points) < 8:
+            continue
+        local_x = (support_points - origin) @ basis_x
+        local_y = (support_points - origin) @ basis_y
+        local_z = (support_points - origin) @ extrusion_axis
+        center_xy = (float(np.mean(local_x)), float(np.mean(local_y)))
+        z_min = float(np.min(local_z))
+        z_max = float(np.max(local_z))
+        face_tol = max(tolerances.linear * 3.0, depth * 0.08)
+        if abs(z_min) <= face_tol and z_max < depth - face_tol:
+            start_from_top = False
+        elif abs(z_max - depth) <= face_tol and z_min > face_tol:
+            start_from_top = True
+        else:
+            continue
+
+        blind_match: BlindHoleFeature | None = None
+        for blind_hole in blind_holes:
+            center_delta = math.dist(center_xy, blind_hole.center_xy)
+            if center_delta > max(tolerances.linear * 3.0, blind_hole.radius * 0.3):
+                continue
+            blind_alignment = abs(
+                float(
+                    np.dot(
+                        cone.axis_direction,
+                        np.asarray(blind_hole.axis_direction, dtype=np.float64),
+                    )
+                )
+            )
+            if blind_alignment < math.cos(math.radians(tolerances.angular_deg * 2.5)):
+                continue
+            blind_match = blind_hole
+            break
+        if blind_match is None:
+            continue
+
+        counter_sink_radius = float(max(cone.base_radius, cone.top_radius))
+        if counter_sink_radius <= blind_match.radius + max(tolerances.linear * 1.5, blind_match.radius * 0.08):
+            continue
+
+        cone_depth = _countersink_depth(
+            hole_radius=float(blind_match.radius),
+            sink_radius=counter_sink_radius,
+            sink_angle_deg=float(cone.semi_angle_deg * 2.0),
+        )
+        cone_depth = min(
+            cone_depth,
+            max(
+                0.0,
+                float(blind_match.hole_depth) - max(tolerances.linear * 2.0, blind_match.radius),
+            ),
+        )
+        if cone_depth <= tolerances.linear:
+            continue
+
+        sections = [
+            HoleSection(
+                kind=HoleSectionKind.CONE,
+                start_offset=0.0,
+                end_offset=float(cone_depth),
+                start_radius=counter_sink_radius,
+                end_radius=float(blind_match.radius),
+            ),
+            HoleSection(
+                kind=HoleSectionKind.CYLINDER,
+                start_offset=float(cone_depth),
+                end_offset=float(blind_match.hole_depth),
+                start_radius=float(blind_match.radius),
+                end_radius=float(blind_match.radius),
+            ),
+        ]
+        stacks.append(
+            HoleStackFeature(
+                kind=FeatureKind.HOLE_STACK,
+                confidence=Confidence(
+                    score=min(1.0, max(cone.confidence.score, blind_match.confidence.score) * 0.9 + 0.06),
+                    reasons=[
+                        "aligned cone matched to blind-hole axis",
+                        f"blind radius {blind_match.radius:.4f}",
+                        f"countersink radius {counter_sink_radius:.4f}",
+                        f"blind depth {blind_match.hole_depth:.4f}",
+                    ],
+                ),
+                parameters={
+                    "center_xy": center_xy,
+                    "total_depth": float(blind_match.hole_depth),
+                    "termination": HoleTermination.BLIND.value,
+                    "start_from_top": start_from_top,
+                    "sections": [
+                        {
+                            "kind": section.kind.value,
+                            "start_offset": section.start_offset,
+                            "end_offset": section.end_offset,
+                            "start_radius": section.start_radius,
+                            "end_radius": section.end_radius,
+                        }
+                        for section in sections
+                    ],
+                },
+                references={},
+                center_xy=center_xy,
+                axis_origin=blind_match.axis_origin,
+                axis_direction=blind_match.axis_direction,
+                start_from_top=start_from_top,
+                total_depth=float(blind_match.hole_depth),
+                termination=HoleTermination.BLIND,
+                sections=sections,
+            )
+        )
+
+    return _deduplicate_hole_stacks(stacks, tolerances)
+
+
+def _infer_counterbore_stacks(
+    *,
+    cylinder_primitives: list[CylinderPrimitive],
+    base_extrude: BaseExtrudeFeature,
+    through_holes: list[ThroughHoleFeature],
+    tolerances: ToleranceConfig,
+) -> list[HoleStackFeature]:
+    if not cylinder_primitives or not through_holes:
+        return []
+
+    extrusion_axis = np.asarray(base_extrude.sketch_plane["z_dir"], dtype=np.float64)
+    origin = np.asarray(base_extrude.sketch_plane["origin"], dtype=np.float64)
+    depth = float(base_extrude.depth)
+    max_counterbore_depth = min(depth * 0.55, depth - max(tolerances.linear * 4.0, depth * 0.12))
+    stacks: list[HoleStackFeature] = []
+
+    for hole in through_holes:
+        hole_axis = np.asarray(hole.axis_direction, dtype=np.float64)
+        hole_axis = hole_axis / max(np.linalg.norm(hole_axis), 1e-12)
+        hole_depth = float(hole.depth) if hole.depth is not None else depth
+        for cylinder in cylinder_primitives:
+            if cylinder.height_estimate is None:
+                continue
+            if cylinder.radius <= hole.radius + max(tolerances.linear * 1.5, hole.radius * 0.12):
+                continue
+            if cylinder.height_estimate >= max_counterbore_depth:
+                continue
+
+            bore_axis = np.asarray(cylinder.axis_direction, dtype=np.float64)
+            bore_axis = bore_axis / max(np.linalg.norm(bore_axis), 1e-12)
+            axis_alignment = abs(float(np.dot(bore_axis, hole_axis)))
+            if axis_alignment < math.cos(math.radians(tolerances.angular_deg * 2.5)):
+                continue
+
+            center_delta = math.dist(_local_center_xy(cylinder.axis_origin, base_extrude), hole.center_xy)
+            if center_delta > max(tolerances.linear * 3.0, hole.radius * 0.3, cylinder.radius * 0.2):
+                continue
+
+            axis_offset = float(np.dot(np.asarray(cylinder.axis_origin, dtype=np.float64) - origin, extrusion_axis))
+            face_tol = max(tolerances.linear * 3.0, depth * 0.08)
+            if abs(axis_offset) <= face_tol:
+                start_from_top = False
+            elif abs(axis_offset - depth) <= face_tol:
+                start_from_top = True
+            else:
+                continue
+
+            bore_depth = float(
+                min(
+                    cylinder.height_estimate * 1.06 + tolerances.linear,
+                    max_counterbore_depth,
+                )
+            )
+            if bore_depth <= max(tolerances.linear * 3.0, hole.radius * 0.5):
+                continue
+            if bore_depth >= hole_depth - max(tolerances.linear * 3.0, hole.radius * 0.75):
+                continue
+
+            sections = [
+                HoleSection(
+                    kind=HoleSectionKind.CYLINDER,
+                    start_offset=0.0,
+                    end_offset=bore_depth,
+                    start_radius=float(cylinder.radius),
+                    end_radius=float(cylinder.radius),
+                ),
+                HoleSection(
+                    kind=HoleSectionKind.CYLINDER,
+                    start_offset=bore_depth,
+                    end_offset=hole_depth,
+                    start_radius=float(hole.radius),
+                    end_radius=float(hole.radius),
+                ),
+            ]
+            stacks.append(
+                HoleStackFeature(
+                    kind=FeatureKind.HOLE_STACK,
+                    confidence=Confidence(
+                        score=min(1.0, max(cylinder.confidence.score, hole.confidence.score) * 0.9 + 0.08),
+                        reasons=[
+                            "coaxial shallow large cylinder paired with deeper through-hole",
+                            f"counterbore radius {cylinder.radius:.4f}",
+                            f"pilot radius {hole.radius:.4f}",
+                            f"counterbore depth {bore_depth:.4f}",
+                        ],
+                    ),
+                    parameters={
+                        "center_xy": hole.center_xy,
+                        "total_depth": hole_depth,
+                        "termination": HoleTermination.THROUGH.value,
+                        "start_from_top": start_from_top,
+                        "sections": [
+                            {
+                                "kind": section.kind.value,
+                                "start_offset": section.start_offset,
+                                "end_offset": section.end_offset,
+                                "start_radius": section.start_radius,
+                                "end_radius": section.end_radius,
+                            }
+                            for section in sections
+                        ],
+                    },
+                    references={},
+                    center_xy=hole.center_xy,
+                    axis_origin=hole.axis_origin,
+                    axis_direction=hole.axis_direction,
+                    start_from_top=start_from_top,
+                    total_depth=hole_depth,
+                    termination=HoleTermination.THROUGH,
+                    sections=sections,
+                )
+            )
+
+    return _deduplicate_hole_stacks(stacks, tolerances)
 
 
 def _compose_hole_stacks(
@@ -393,6 +685,17 @@ def _blind_hole_starts_from_top(
     z_dir = np.asarray(base_extrude.sketch_plane["z_dir"], dtype=np.float64)
     axial_offset = float(np.dot(np.asarray(blind_hole.axis_origin, dtype=np.float64) - origin, z_dir))
     return axial_offset >= (float(base_extrude.depth) * 0.5)
+
+
+def _local_center_xy(
+    axis_origin: np.ndarray | tuple[float, float, float],
+    base_extrude: BaseExtrudeFeature,
+) -> tuple[float, float]:
+    origin = np.asarray(base_extrude.sketch_plane["origin"], dtype=np.float64)
+    basis_x = np.asarray(base_extrude.sketch_plane["x_dir"], dtype=np.float64)
+    basis_y = np.asarray(base_extrude.sketch_plane["y_dir"], dtype=np.float64)
+    offset = np.asarray(axis_origin, dtype=np.float64) - origin
+    return (float(np.dot(offset, basis_x)), float(np.dot(offset, basis_y)))
 
 
 def _infer_spherical_modifiers(
@@ -647,6 +950,93 @@ def _infer_base_extrude(
         kind=FeatureKind.BASE_EXTRUDE,
         confidence=confidence,
         parameters={"depth": depth},
+        references={},
+        profile_loops=[profile_loop],
+        depth=depth,
+        sketch_plane={
+            "origin": base_plane.origin,
+            "x_dir": basis_x,
+            "y_dir": basis_y,
+            "z_dir": extrusion_axis,
+        },
+    )
+
+
+def _infer_secondary_base_extrude(
+    plane_primitives: list[PlanePrimitive],
+    cloud: SampledCloud,
+    tolerances: ToleranceConfig,
+    primary: BaseExtrudeFeature,
+) -> BaseExtrudeFeature | None:
+    """Infer a second prismatic stock whose extrusion axis is not parallel to the primary."""
+    primary_z = np.asarray(primary.sketch_plane["z_dir"], dtype=np.float64)
+    primary_z = primary_z / max(float(np.linalg.norm(primary_z)), 1e-12)
+
+    max_plane_area = max((float(p.region.area) for p in plane_primitives), default=0.0)
+    if max_plane_area <= 0.0:
+        return None
+
+    best_pair: tuple[PlanePrimitive, PlanePrimitive] | None = None
+    best_pair_score = -math.inf
+
+    for left_index, left_plane in enumerate(plane_primitives):
+        for right_plane in plane_primitives[left_index + 1 :]:
+            alignment = abs(float(np.dot(left_plane.normal, right_plane.normal)))
+            if alignment < math.cos(math.radians(tolerances.angular_deg)):
+                continue
+
+            separation = abs(
+                float(np.dot(right_plane.origin - left_plane.origin, left_plane.normal))
+            )
+            if separation <= tolerances.linear * 2.0:
+                continue
+
+            extrusion_axis = _canonical_axis(left_plane.normal, right_plane.origin - left_plane.origin)
+            extrusion_axis = extrusion_axis / max(float(np.linalg.norm(extrusion_axis)), 1e-12)
+            if abs(float(np.dot(extrusion_axis, primary_z))) > 0.78:
+                continue
+
+            pair_score = min(left_plane.region.area, right_plane.region.area)
+            if pair_score > best_pair_score:
+                best_pair = (left_plane, right_plane)
+                best_pair_score = pair_score
+
+    if best_pair is None or best_pair_score <= tolerances.linear * 8.0:
+        return None
+    # Avoid classifying simple rectangular stock (three orthogonal plane pairs) as multi-body:
+    # require the secondary pair to be clearly smaller than the dominant planar patch.
+    if best_pair_score > 0.30 * max_plane_area:
+        return None
+
+    base_plane, opposite_plane = best_pair
+    extrusion_axis = _canonical_axis(base_plane.normal, opposite_plane.origin - base_plane.origin)
+    depth = abs(float(np.dot(opposite_plane.origin - base_plane.origin, extrusion_axis)))
+
+    basis_x = _perpendicular_unit_vector(extrusion_axis)
+    basis_y = np.cross(extrusion_axis, basis_x)
+
+    support_indices = sorted(
+        set(base_plane.region.point_indices).union(opposite_plane.region.point_indices)
+    )
+    support_points = np.asarray(cloud.points[support_indices], dtype=np.float64)
+    local_x = (support_points - base_plane.origin) @ basis_x
+    local_y = (support_points - base_plane.origin) @ basis_y
+
+    profile_loop = _infer_profile_loop(local_x, local_y, tolerances)
+
+    confidence = Confidence(
+        score=min(0.85, (base_plane.confidence.score + opposite_plane.confidence.score) / 2.0),
+        reasons=[
+            "secondary paired planes with axis skewed to primary stock",
+            f"extrusion depth {depth:.4f}",
+            f"profile vertices {len(profile_loop)}",
+        ],
+    )
+
+    return BaseExtrudeFeature(
+        kind=FeatureKind.BASE_EXTRUDE,
+        confidence=confidence,
+        parameters={"depth": depth, "secondary_stock": True},
         references={},
         profile_loops=[profile_loop],
         depth=depth,
@@ -1090,6 +1480,106 @@ def _infer_bosses(
     return _deduplicate_bosses(bosses, tolerances)
 
 
+def _infer_tapered_bosses(
+    *,
+    cone_primitives: list[ConePrimitive],
+    base_extrude: BaseExtrudeFeature,
+    cloud: SampledCloud,
+    tolerances: ToleranceConfig,
+    reserved_hole_centers: list[tuple[tuple[float, float], float]] | None = None,
+) -> list[TaperedBossFeature]:
+    if not cone_primitives:
+        return []
+
+    extrusion_axis = np.asarray(base_extrude.sketch_plane["z_dir"], dtype=np.float64)
+    basis_x = np.asarray(base_extrude.sketch_plane["x_dir"], dtype=np.float64)
+    basis_y = np.asarray(base_extrude.sketch_plane["y_dir"], dtype=np.float64)
+    origin = np.asarray(base_extrude.sketch_plane["origin"], dtype=np.float64)
+    depth = float(base_extrude.depth)
+    face_tol = max(tolerances.linear * 3.0, depth * 0.08)
+    bosses: list[TaperedBossFeature] = []
+
+    for cone in cone_primitives:
+        alignment = abs(float(np.dot(cone.axis_direction, extrusion_axis)))
+        if alignment < math.cos(math.radians(tolerances.angular_deg * 2.5)):
+            continue
+        if cone.height_estimate is None or cone.height_estimate <= tolerances.linear * 2.0:
+            continue
+        if cone.base_radius <= cone.top_radius + max(tolerances.linear * 1.5, cone.base_radius * 0.08):
+            continue
+
+        support_points = np.asarray(cloud.points[cone.region.point_indices], dtype=np.float64)
+        if len(support_points) < 8:
+            continue
+
+        local_x = (support_points - origin) @ basis_x
+        local_y = (support_points - origin) @ basis_y
+        local_z = (support_points - origin) @ extrusion_axis
+        center_xy = (float(np.mean(local_x)), float(np.mean(local_y)))
+
+        if reserved_hole_centers:
+            skip_reserved = False
+            for reserved_xy, reserved_r in reserved_hole_centers:
+                if math.dist(center_xy, reserved_xy) <= max(
+                    tolerances.linear * 3.0,
+                    cone.base_radius * 0.3,
+                    reserved_r * 0.35,
+                ):
+                    skip_reserved = True
+                    break
+            if skip_reserved:
+                continue
+
+        z_min = float(np.min(local_z))
+        z_max = float(np.max(local_z))
+        if abs(z_min - depth) <= face_tol and z_max > depth + face_tol * 0.5:
+            start_from_top = True
+            start_offset = depth
+            height = float(z_max - depth)
+        elif abs(z_max) <= face_tol and z_min < -face_tol * 0.5:
+            start_from_top = False
+            start_offset = 0.0
+            height = float(-z_min)
+        else:
+            continue
+
+        if height <= tolerances.linear * 2.0:
+            continue
+
+        confidence = Confidence(
+            score=min(1.0, cone.confidence.score * 0.84 + 0.1),
+            reasons=[
+                "cone support protrudes from a stock face",
+                f"base radius {cone.base_radius:.4f}",
+                f"top radius {cone.top_radius:.4f}",
+                f"height {height:.4f}",
+            ],
+        )
+        bosses.append(
+            TaperedBossFeature(
+                kind=FeatureKind.TAPERED_BOSS,
+                confidence=confidence,
+                parameters={
+                    "center_xy": center_xy,
+                    "base_radius": float(cone.base_radius),
+                    "top_radius": float(cone.top_radius),
+                    "height": height,
+                    "start_offset": start_offset,
+                    "start_from_top": start_from_top,
+                },
+                references={},
+                center_xy=center_xy,
+                base_radius=float(cone.base_radius),
+                top_radius=float(cone.top_radius),
+                height=height,
+                start_offset=float(start_offset),
+                start_from_top=bool(start_from_top),
+            )
+        )
+
+    return _deduplicate_tapered_bosses(bosses, tolerances)
+
+
 def _canonical_axis(normal: np.ndarray, separation_vector: np.ndarray) -> np.ndarray:
     axis = np.asarray(normal, dtype=np.float64)
     axis = axis / max(np.linalg.norm(axis), 1e-12)
@@ -1496,6 +1986,41 @@ def _deduplicate_bosses(
                 center_delta <= max(tolerances.linear * 2.0, boss.radius * 0.2)
                 and radius_delta <= max(tolerances.linear * 2.0, boss.radius * 0.1)
                 and height_delta <= max(tolerances.linear * 2.0, boss.height * 0.2)
+            ):
+                duplicate = True
+                break
+        if not duplicate:
+            deduplicated.append(boss)
+    return deduplicated
+
+
+def _deduplicate_tapered_bosses(
+    bosses: list[TaperedBossFeature],
+    tolerances: ToleranceConfig,
+) -> list[TaperedBossFeature]:
+    deduplicated: list[TaperedBossFeature] = []
+    for boss in sorted(
+        bosses,
+        key=lambda item: (
+            item.center_xy[0],
+            item.center_xy[1],
+            item.base_radius,
+            item.top_radius,
+            item.start_offset,
+        ),
+    ):
+        duplicate = False
+        for existing in deduplicated:
+            center_delta = math.dist(boss.center_xy, existing.center_xy)
+            base_delta = abs(boss.base_radius - existing.base_radius)
+            top_delta = abs(boss.top_radius - existing.top_radius)
+            height_delta = abs(boss.height - existing.height)
+            if (
+                center_delta <= max(tolerances.linear * 2.0, boss.base_radius * 0.2)
+                and base_delta <= max(tolerances.linear * 2.0, boss.base_radius * 0.1)
+                and top_delta <= max(tolerances.linear * 2.0, max(boss.top_radius, 1e-6) * 0.15)
+                and height_delta <= max(tolerances.linear * 2.0, boss.height * 0.2)
+                and boss.start_from_top == existing.start_from_top
             ):
                 duplicate = True
                 break

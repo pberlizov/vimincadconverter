@@ -224,7 +224,7 @@ Images: **`Dockerfile`** (API + queue), **`Dockerfile.full`** (**`[cad]`** / bui
 
 ## Benchmarks & north star
 
-- Catalog: `benchmarks/cases.json` (synthetic meshes, no large binaries). Runner: `mesh2cad.benchmarks.runner`. Cases may set **`build_export`: true** to run STEP/STL export (needs optional **build123d**); optional **`expect_warning_substr`** checks merged pipeline warnings (for example validation surface strings). **`expect_route_any_of`** and **`min_feature_kind_counts_by_route`** allow routing-sensitive cases (for example capsule) without brittle single-route assertions. The **`build123d_two_hole_plate`** generator materializes a preview STL via **build123d** (skipped in `pytest` when build123d is not installed); CI runs those cases in the **test-with-build123d** workflow job.
+- Catalog: `benchmarks/cases.json` (synthetic meshes, **`.xyz` point clouds**, small **fixture files** under `benchmarks/fixtures/`, and optional **build123d**-built meshes). Runner: `mesh2cad.benchmarks.runner`. Cases may set **`build_export`: true** to run STEP/STL export (needs optional **build123d**); optional **`expect_warning_substr`** checks merged pipeline warnings (for example validation surface strings). **`expect_route_any_of`** and **`min_feature_kind_counts_by_route`** allow routing-sensitive cases (for example capsule) without brittle single-route assertions. Optional **`repair_component_index`** selects a multi-body component before inference. The **`build123d_two_hole_plate`** generator materializes a preview STL via **build123d** (skipped in `pytest` when build123d is not installed); CI runs those cases in the **test-with-build123d** workflow job.
 - Product intent and acceptance focus: `docs/NORTH_STAR.md`.
 
 ## Development

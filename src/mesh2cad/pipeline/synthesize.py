@@ -5,7 +5,7 @@ from pathlib import Path
 
 from mesh2cad.cad.build123d_builder import BuildResult, build_step_from_script
 from mesh2cad.cad.script_generator import generate_script
-from mesh2cad.domain.features import Feature
+from mesh2cad.domain.features import BaseExtrudeFeature, Feature
 
 
 @dataclass(slots=True)
@@ -23,8 +23,16 @@ def synthesize_build123d_script(
     output_dir: str | Path | None = None,
 ) -> SynthesisResult:
     """Turn inferred features into a first-pass build123d script and optionally build it."""
-    script = generate_script(features)
     warnings: list[str] = []
+    base_count = sum(1 for feature in features if isinstance(feature, BaseExtrudeFeature))
+    if base_count > 1:
+        warnings.append(
+            "Multiple base extrusions were inferred (multi-face / multi-stock geometry). "
+            "The generated build123d script still targets the primary stock only; merge bodies "
+            "manually in CAD or follow releases for full multi-extrude export."
+        )
+
+    script = generate_script(features)
     build_success = False
     step_path: str | None = None
 

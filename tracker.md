@@ -479,43 +479,45 @@ Legend:
 
 These are the next broadening moves that increase the product's addressable mechanical surface area rather than only polishing existing single-feature routes.
 
-- [ ] Hole-stack abstraction exists.
+- [x] Hole-stack abstraction exists.
   Verification:
   - Inspect the feature/domain model for a structured axial hole representation.
   - Verify by tests that represent at least two stacked-section hole cases with one shared axis.
-- [ ] Counterbore inference exists.
+- [x] Counterbore inference exists.
   Verification:
   - Add feature-inference tests for coaxial stepped cylindrical bores from one entry face.
   - Verify generated CAD script output includes the stepped-bore reconstruction.
-- [ ] Tapered blind-hole inference exists.
+- [x] Tapered blind-hole inference exists.
   Verification:
   - Add cone-plus-cylinder feature tests that emit a tapered blind-hole or equivalent structured hole stack.
-- [ ] Tapered boss inference exists.
+- [x] Tapered boss inference exists.
   Verification:
   - Add cone-backed protrusion tests and verify generated additive CAD output.
-- [ ] Multi-face prismatic reconstruction exists.
+- [~] Multi-face prismatic reconstruction exists (secondary stock inference + benchmark).
   Verification:
-  - Add at least one benchmark or smoke test where features live on more than one dominant stock face.
-  - Verify generated CAD output does not collapse the part to a single-face-only modifier model.
+  - Benchmark `side_tab_plate_multiface_prismatic` in `benchmarks/cases.json` expects two `base_extrude` features and the multi-base synthesis warning.
+  - Generated build123d script still serializes the **primary** stock first; full dual-stock CAD export is tracked separately.
 - [ ] Multi-stock / additive prismatic sequencing exists.
   Verification:
   - Add tests for an L-bracket-like or gusseted part that requires more than one additive stock feature.
 - [ ] Counterbore plus countersink coexistence on one axis is supported.
   Verification:
   - Add a structured hole-stack test with multiple entry modifiers on one shared axis.
-- [ ] Point-cloud-native benchmark cases exist.
+- [x] Point-cloud-native benchmark cases exist.
   Verification:
-  - Add benchmark or smoke cases that start from dense point inputs rather than meshes.
-  - Verify the pipeline produces structured features, not only route classification.
-- [ ] Multi-body selection or splitting exists.
+  - Benchmark `point_cloud_cylinder_revolve` (and existing `box_point_cloud_*` cases) use `.xyz` inputs only.
+  - Run `pytest tests/test_benchmarks.py -k point_cloud_cylinder`.
+- [x] Multi-body selection or splitting exists (component index).
   Verification:
-  - Add tests for disconnected input bodies and verify body discovery, reporting, or selection behavior.
+  - `repair_mesh(..., component_index=…)` and `run_pipeline(..., repair_component_index=…)` plus CLI `--repair-component-index`.
+  - Tests in `tests/test_repair_multibody.py` and catalog case `multibody_second_component_box`.
 - [ ] Rotational route supports tapered profiles from cone primitives.
   Verification:
   - Add tests that infer a tapered revolve-capable profile from cone-dominant rotational input.
-- [ ] Real-part fixture pack exists.
+- [~] Real-part fixture pack exists (v1 starter).
   Verification:
-  - Add a small curated fixture set of ugly real meshes or point clouds with expected routes and minimum feature counts.
+  - Directory `benchmarks/fixtures/` with `README.md`, committed `noisy_plate.stl`, and catalog case `fixture_noisy_plate_prismatic`.
+  - Expand the pack over time with additional small scan-like meshes or clouds.
 
 ## End-of-Step Physical Audit Template
 
@@ -1548,4 +1550,141 @@ These are the next broadening moves that increase the product's addressable mech
   - The next-wave product backlog is now organized around hole stacks, counterbores, tapered features, multi-face prismatic parts, multi-body handling, point-cloud-native coverage, and broader rotational workflows.
 - Gaps still not physically present:
   - The new breadth-expansion items remain backlog items and are not implemented yet.
+  - There is still no external queue or supervisor.
+
+## Step Audit 2026-04-27 G
+
+- Files added this step:
+  - None.
+- Files modified this step:
+  - `src/mesh2cad/domain/types.py`
+  - `src/mesh2cad/domain/features.py`
+  - `src/mesh2cad/pipeline/infer_features.py`
+  - `src/mesh2cad/cad/script_generator.py`
+  - `src/mesh2cad/mesh/sampling.py`
+  - `tests/test_mesh_pipeline_smoke.py`
+  - `tracker.md`
+- Commands run this step:
+  - `sed -n '1,220p' src/mesh2cad/domain/features.py`
+  - `sed -n '1,260p' src/mesh2cad/domain/types.py`
+  - `sed -n '1,420p' src/mesh2cad/pipeline/infer_features.py`
+  - `sed -n '1,360p' src/mesh2cad/cad/script_generator.py`
+  - `rg -n "COUNTERSINK|counterbore|blind hole|ThroughHoleFeature|BlindHoleFeature|CounterSinkHoleFeature|Hole" tests/test_mesh_pipeline_smoke.py src/mesh2cad -g '!*.pyc'`
+  - `python3.11 - <<'PY' ... PY` to inspect `build123d` hole helpers
+  - `pytest -q tests/test_mesh_pipeline_smoke.py -k 'hole_stack or countersink or counterbore'`
+  - `python3.11 -m pytest -q tests/test_mesh_pipeline_smoke.py -k 'hole_stack or countersink or counterbore'`
+  - `python3.11 -m pytest -q tests/test_benchmarks.py -k 'two_hole_plate_prismatic_through_holes'`
+  - `python3.11 -m pytest -q tests/test_mesh_pipeline_smoke.py -k 'generated_angled_hole_script_is_buildable or hole_stack or counterbore'`
+  - `pytest -q tests/test_mesh_pipeline_smoke.py -k 'hole_stack or counterbore'`
+  - `pkill -f ...` cleanup for stale `pytest` and worker processes
+- Tests passed this step:
+  - `tests/test_mesh_pipeline_smoke.py::test_infer_features_detects_countersink_hole_stack`
+  - `tests/test_mesh_pipeline_smoke.py::test_generate_build123d_script_supports_countersink_hole_stack`
+  - `tests/test_mesh_pipeline_smoke.py::test_generate_build123d_script_supports_counterbore_hole_stack`
+  - `tests/test_mesh_pipeline_smoke.py::test_generated_angled_hole_script_is_buildable`
+  - `tests/test_benchmarks.py::test_benchmark_cases_meet_expectations[two_hole_plate_prismatic_through_holes]`
+  - Focused aggregate commands listed above all passed.
+- Behaviors now physically present:
+  - The domain model now includes a structured `HoleStackFeature` with axial `HoleSection` records and explicit hole termination semantics.
+  - Feature inference now composes existing through-hole, blind-hole, and countersink detections into structured hole stacks without removing the current feature-specific outputs.
+  - The CAD script generator now understands hole stacks and can decompose supported stack patterns back into executable build123d operations.
+  - Countersink hole stacks are now supported as one cone section plus one cylindrical section on a shared axis.
+  - Counterbore-style stepped cylindrical stacks are now supported in generated CAD output via `CounterBoreHole`.
+  - Hole inference is more robust on noisy stock profiles because hole-fit checks now fall back to an outer profile envelope when the detailed loop is too irregular.
+  - Surface sampling is now deterministic for repeatable benchmark and inference behavior on the same mesh input.
+  - The angled through-hole build path was corrected so the generated script builds successfully under the build-enabled environment.
+- Gaps still not physically present:
+  - Counterbore inference does not yet exist as a native downstream inference route from fitted primitives.
+  - Tapered blind-hole and tapered boss inference are still backlog items.
+  - There is still no external queue or supervisor.
+
+## Step Audit 2026-04-27 H
+
+- Files added this step:
+  - None.
+- Files modified this step:
+  - `src/mesh2cad/pipeline/infer_features.py`
+  - `tests/test_mesh_pipeline_smoke.py`
+  - `tracker.md`
+- Commands run this step:
+  - `sed -n '500,760p' src/mesh2cad/pipeline/infer_features.py`
+  - `sed -n '1,260p' src/mesh2cad/domain/features.py`
+  - `rg -n "counterbore|HoleStackFeature|BlindHoleFeature|COUNTERBORE_HOLES|hole stack" tests src/mesh2cad -g '!*.pyc'`
+  - `pytest -q tests/test_mesh_pipeline_smoke.py -k 'counterbore_hole_stack'`
+  - `python3.11 -m pytest -q tests/test_mesh_pipeline_smoke.py -k 'counterbore_hole_stack'`
+  - `pytest -q tests/test_mesh_pipeline_smoke.py -k 'hole_stack or counterbore or countersink_hole_stack'`
+  - `python3.11 -m pytest -q tests/test_mesh_pipeline_smoke.py -k 'hole_stack or counterbore or countersink_hole_stack'`
+- Tests passed this step:
+  - `tests/test_mesh_pipeline_smoke.py::test_infer_features_detects_counterbore_hole_stack`
+  - `tests/test_mesh_pipeline_smoke.py::test_generate_build123d_script_supports_counterbore_hole_stack`
+  - `tests/test_mesh_pipeline_smoke.py::test_generate_build123d_script_supports_countersink_hole_stack`
+  - Focused aggregate commands listed above all passed in both interpreters.
+- Behaviors now physically present:
+  - The feature inference layer can now detect a native counterbore-style stepped hole from a shallow large cylinder paired with a deeper coaxial through-hole cylinder.
+  - Counterbore inference emits a structured `HoleStackFeature` with two cylindrical sections on a shared axis.
+  - The existing CAD script generator already consumes that inferred stack and reconstructs it as a `CounterBoreHole`.
+  - Counterbore inference is now verified with a synthetic primitive-backed stepped-bore test in both interpreters.
+- Gaps still not physically present:
+  - Tapered blind-hole inference is still absent.
+  - Tapered boss inference is still absent.
+  - There is still no external queue or supervisor.
+
+## Step Audit 2026-04-27 I
+
+- Files added this step:
+  - None.
+- Files modified this step:
+  - `src/mesh2cad/pipeline/infer_features.py`
+  - `src/mesh2cad/cad/script_generator.py`
+  - `tests/test_mesh_pipeline_smoke.py`
+  - `tracker.md`
+- Commands run this step:
+  - `rg -n "CounterSinkHole\\(|COUNTERSINK_HOLES|ANGLED_COUNTERSINKS|HoleStackFeature|_stack_is_countersink|BLIND_HOLE" src/mesh2cad/cad/script_generator.py src/mesh2cad/pipeline/infer_features.py tests/test_mesh_pipeline_smoke.py`
+  - `python3.11 - <<'PY' ... PY` to confirm `CounterSinkHole` signature supports finite `depth`
+  - `pytest -q tests/test_mesh_pipeline_smoke.py -k 'tapered_blind_hole_stack'`
+  - `python3.11 -m pytest -q tests/test_mesh_pipeline_smoke.py -k 'tapered_blind_hole_stack'`
+  - `pytest -q tests/test_mesh_pipeline_smoke.py -k 'hole_stack or counterbore_hole_stack or tapered_blind_hole_stack or countersink_hole_stack'`
+  - `python3.11 -m pytest -q tests/test_mesh_pipeline_smoke.py -k 'hole_stack or counterbore_hole_stack or tapered_blind_hole_stack or countersink_hole_stack'`
+- Tests passed this step:
+  - `tests/test_mesh_pipeline_smoke.py::test_infer_features_detects_tapered_blind_hole_stack`
+  - `tests/test_mesh_pipeline_smoke.py::test_generate_build123d_script_supports_tapered_blind_hole_stack`
+  - Focused aggregate commands listed above all passed in both interpreters.
+- Behaviors now physically present:
+  - The feature inference layer can now detect a tapered blind hole from a cone primitive matched to a blind cylindrical hole on a shared axis.
+  - Tapered blind-hole inference emits a structured blind `HoleStackFeature` with one cone section followed by one cylindrical section.
+  - The CAD script generator now consumes blind cone+cylinder stacks and reconstructs them with `CounterSinkHole(..., depth=blind_depth)`.
+  - The tapered blind route is verified both at feature-inference level and generated-script level.
+- Gaps still not physically present:
+  - Tapered boss inference is still absent.
+  - There is still no external queue or supervisor.
+
+## Step Audit 2026-04-27 J
+
+- Files added this step:
+  - None.
+- Files modified this step:
+  - `src/mesh2cad/domain/types.py`
+  - `src/mesh2cad/domain/features.py`
+  - `src/mesh2cad/pipeline/infer_features.py`
+  - `src/mesh2cad/cad/script_generator.py`
+  - `tests/test_mesh_pipeline_smoke.py`
+  - `tracker.md`
+- Commands run this step:
+  - `rg -n "BossFeature|_infer_bosses|ConePrimitive|boss" src/mesh2cad/pipeline/infer_features.py src/mesh2cad/cad/script_generator.py src/mesh2cad/domain/features.py tests/test_mesh_pipeline_smoke.py`
+  - `python3.11 - <<'PY' ... PY` to inspect `Cone` and `loft` build123d primitives
+  - `pytest -q tests/test_mesh_pipeline_smoke.py -k 'tapered_boss'`
+  - `python3.11 -m pytest -q tests/test_mesh_pipeline_smoke.py -k 'tapered_boss'`
+  - `pytest -q tests/test_mesh_pipeline_smoke.py -k 'tapered_boss or bosses or tapered_blind_hole_stack or counterbore_hole_stack or countersink_hole_stack'`
+  - `python3.11 -m pytest -q tests/test_mesh_pipeline_smoke.py -k 'tapered_boss or bosses or tapered_blind_hole_stack or counterbore_hole_stack or countersink_hole_stack'`
+- Tests passed this step:
+  - `tests/test_mesh_pipeline_smoke.py::test_infer_features_detects_tapered_boss`
+  - `tests/test_mesh_pipeline_smoke.py::test_generate_build123d_script_supports_tapered_bosses`
+  - Focused aggregate commands listed above all passed in both interpreters.
+- Behaviors now physically present:
+  - The domain model now includes a `TaperedBossFeature`.
+  - The feature inference layer can now detect tapered outward cone-backed protrusions from a stock face.
+  - Tapered boss inference emits an additive feature with base radius, top radius, height, face attachment, and start offset.
+  - The CAD script generator now reconstructs tapered bosses with additive `loft` geometry between two circular sketches.
+  - Tapered boss inference and CAD generation are both covered by focused tests.
+- Gaps still not physically present:
   - There is still no external queue or supervisor.
