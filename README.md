@@ -91,6 +91,12 @@ curl -sS -X POST "http://127.0.0.1:8000/v1/process" \
   -F "include_script=true"
 ```
 
+The JSON body includes the usual pipeline fields plus **`session_id`** and an **`artifacts`** map of paths such as **`/v1/process/artifacts/<session_id>/step`** (STEP file when **`build123d`** ran successfully), **`…/report`**, **`…/script`**, **`…/preview`**, **`…/input`**. `GET` those URLs (same **`MESH2CAD_API_KEYS`** rules as other `/v1` routes) to download binaries without polling async jobs.
+
+Multipart uploads store the mesh and build outputs under **`$MESH2CAD_STATE_DIR/v1_sync/<session_id>/`** (the form field **`output_dir`** is not used for multipart so paths stay predictable). Prune old **`v1_sync`** directories on a schedule if you run many sync uploads.
+
+**JSON** `POST /v1/process` (body field **`input_path`** pointing at a file already on the server) returns the same pipeline JSON but **no** **`session_id`** / **`artifacts`**; use async **`POST /v1/jobs`** + **`GET /v1/jobs/{id}/artifacts/...`** for downloadable files in that case.
+
 Omit **`X-API-Key`** when **`MESH2CAD_API_KEYS`** is not configured (local development only).
 
 **Asynchronous** job (same form fields as `/v1/process`; poll `GET /v1/jobs/{id}` or subscribe to `GET /v1/jobs/{id}/events`):

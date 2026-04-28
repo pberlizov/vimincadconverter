@@ -66,6 +66,36 @@ def test_v1_process_json_no_build(tmp_path, monkeypatch) -> None:
     payload = r.json()
     assert payload.get("build") is None or payload.get("build", {}).get("script") is None
     assert "reconstruction_plan" in payload
+    assert "session_id" not in payload
+    assert "artifacts" not in payload
+
+
+def test_v1_process_multipart_session_artifacts(tmp_path, monkeypatch) -> None:
+    monkeypatch.delenv("MESH2CAD_API_KEYS", raising=False)
+    monkeypatch.setenv("MESH2CAD_STATE_DIR", str(tmp_path))
+    import trimesh
+
+    box = trimesh.creation.box(extents=(1.0, 1.2, 0.8))
+    stl_path = tmp_path / "upload.stl"
+    box.export(stl_path)
+    stl_bytes = stl_path.read_bytes()
+    app_client = TestClient(create_app())
+    r = app_client.post(
+        "/v1/process",
+        files={"file": ("part.stl", stl_bytes, "application/octet-stream")},
+        data={"build": "false", "sample_count": "800", "include_script": "true"},
+    )
+    assert r.status_code == 200, r.text
+    payload = r.json()
+    sid = payload.get("session_id")
+    assert isinstance(sid, str) and len(sid) == 32
+    arts = payload.get("artifacts")
+    assert isinstance(arts, dict) and arts.get("report", "").endswith("/report")
+    rep = app_client.get(f"/v1/process/artifacts/{sid}/report")
+    assert rep.status_code == 200
+    assert rep.headers.get("content-type", "").startswith("application/json")
+    bad = app_client.get("/v1/process/artifacts/not-a-uuid/report")
+    assert bad.status_code == 400
 
 
 def test_v1_jobs_idempotency_header(tmp_path, monkeypatch) -> None:

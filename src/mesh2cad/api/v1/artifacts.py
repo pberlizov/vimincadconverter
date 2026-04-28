@@ -2,10 +2,40 @@
 
 from __future__ import annotations
 
+import json
+import re
 from pathlib import Path
 from typing import Any
 
 ARTIFACT_NAMES = frozenset({"report", "script", "step", "preview", "input"})
+
+_SYNC_ID_RE = re.compile(r"^[0-9a-f]{32}$")
+
+
+def is_valid_sync_session_id(sync_id: str) -> bool:
+    return bool(_SYNC_ID_RE.match(sync_id))
+
+
+def job_view_from_process_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Shape the same keys ``resolve_artifact_path`` expects from a DB job row."""
+    b = payload.get("build") or {}
+    return {
+        "step_path": b.get("step_path"),
+        "source_path": payload.get("source_path"),
+        "payload": payload,
+    }
+
+
+def write_session_artifacts(session_dir: Path, payload: dict[str, Any]) -> None:
+    """Persist report + script under ``session_dir`` (same layout as async job dirs)."""
+    session_dir.mkdir(parents=True, exist_ok=True)
+    session_dir.joinpath("report.json").write_text(
+        json.dumps(payload, indent=2, default=str),
+        encoding="utf-8",
+    )
+    script = (payload.get("build") or {}).get("script")
+    if script:
+        session_dir.joinpath("reconstruction.py").write_text(str(script), encoding="utf-8")
 
 
 def resolve_artifact_path(job: dict[str, Any], job_dir: Path, artifact_name: str) -> Path | None:

@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import json
-import tempfile
 import uuid
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from starlette.datastructures import UploadFile
 
 from mesh2cad.api.security import require_api_key
 from mesh2cad.api.service import process_mesh
@@ -18,7 +18,10 @@ from mesh2cad.api.v1.artifacts import (
     ARTIFACT_NAMES,
     artifact_filename,
     artifact_media_type,
+    is_valid_sync_session_id,
+    job_view_from_process_payload,
     resolve_artifact_path,
+    write_session_artifacts,
 )
 from mesh2cad.api.v1.schemas import JobSubmitBodyV1, ProcessMeshBodyV1
 from mesh2cad.domain.types import ToleranceConfig
@@ -87,10 +90,36 @@ def _process_options_from_body(body: ProcessMeshBodyV1) -> dict[str, Any]:
     }
 
 
+@router.get("/process/artifacts/{sync_id}/{artifact_name}")
+def v1_process_sync_artifact(sync_id: str, artifact_name: str) -> FileResponse:
+    """Download an artifact from a completed **multipart** ``POST /v1/process`` session."""
+    if artifact_name not in ARTIFACT_NAMES:
+        raise HTTPException(status_code=404, detail="Unknown artifact name.")
+    if not is_valid_sync_session_id(sync_id):
+        raise HTTPException(status_code=400, detail="Invalid session id.")
+    session_dir = get_state_dir() / "v1_sync" / sync_id
+    report_path = session_dir / "report.json"
+    if not report_path.is_file():
+        raise HTTPException(status_code=404, detail="Session not found or expired.")
+    payload: dict[str, Any] = json.loads(report_path.read_text(encoding="utf-8"))
+    job = job_view_from_process_payload(payload)
+    path = resolve_artifact_path(job, session_dir, artifact_name)
+    if path is None or not path.is_file():
+        raise HTTPException(status_code=404, detail="Artifact not found.")
+    fname = artifact_filename(artifact_name, job)
+    return FileResponse(
+        path,
+        filename=fname,
+        media_type=artifact_media_type(artifact_name),
+    )
+
+
 @router.post("/process")
 async def v1_process(request: Request) -> dict[str, Any]:
     """Run pipeline synchronously. Send JSON or ``multipart/form-data`` with ``file``."""
     ct = (request.headers.get("content-type") or "").lower()
+    sync_id: str | None = None
+    session_dir: Path | None = None
     if "multipart/form-data" in ct:
         form = await request.form()
         up = form.get("file")
@@ -102,18 +131,24 @@ async def v1_process(request: Request) -> dict[str, Any]:
             raise HTTPException(status_code=400, detail=f"Unsupported file type: {suffix!r}")
         sync_root = get_state_dir() / "v1_sync"
         sync_root.mkdir(parents=True, exist_ok=True)
-        tmp = Path(tempfile.mkdtemp(prefix="proc_", dir=str(sync_root)))
-        dest = tmp / safe
+        sync_id = uuid.uuid4().hex
+        session_dir = sync_root / sync_id
+        session_dir.mkdir(parents=True, exist_ok=True)
+        dest = session_dir / safe
         await _write_upload_limited(up, dest)
         input_path = dest.resolve()
+        build_flag = _bool_form(form.get("build"), True)
+        out_dir = (session_dir / "output") if build_flag else None
+        if out_dir is not None:
+            out_dir.mkdir(parents=True, exist_ok=True)
         body = JobSubmitBodyV1(
             input_path=input_path,
-            output_dir=Path(form["output_dir"]).expanduser() if form.get("output_dir") else None,
+            output_dir=out_dir,
             sample_count=int(form.get("sample_count") or 5000),
             simplify_target_faces=int(form["simplify_target_faces"])
             if form.get("simplify_target_faces")
             else None,
-            build=_bool_form(form.get("build"), True),
+            build=build_flag,
             auto_tune_sampling=_bool_form(form.get("auto_tune_sampling"), True),
             align_surface_metrics=_bool_form(form.get("align_surface_metrics"), True),
             icp_iterations=int(form.get("icp_iterations") or 10),
@@ -141,11 +176,20 @@ async def v1_process(request: Request) -> dict[str, Any]:
     tol_dict = opts.get("tolerances")
     tc = ToleranceConfig(**tol_dict) if isinstance(tol_dict, dict) and tol_dict else None
     sync_opts = {**opts, "tolerances": tc}
-    return process_mesh(
+    payload = process_mesh(
         input_path=inp,
         output_dir=out,
         **sync_opts,
     )
+    if sync_id is not None and session_dir is not None:
+        write_session_artifacts(session_dir, payload)
+        base = f"/v1/process/artifacts/{sync_id}"
+        payload = {
+            **payload,
+            "session_id": sync_id,
+            "artifacts": {name: f"{base}/{name}" for name in sorted(ARTIFACT_NAMES)},
+        }
+    return payload
 
 
 @router.post("/jobs")

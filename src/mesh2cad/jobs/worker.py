@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from mesh2cad.api.service import process_mesh
+from mesh2cad.api.v1.artifacts import write_session_artifacts
 from mesh2cad.domain.types import ToleranceConfig
 
 
@@ -49,7 +50,7 @@ def run_worker(
         include_script=include_script,
         icp_hybrid_hull_weight=icp_hybrid_hull_weight,
     )
-    _write_job_artifacts(Path(artifact_dir), payload)
+    write_session_artifacts(Path(artifact_dir), payload)
     return payload
 
 
@@ -88,17 +89,6 @@ def main() -> None:
     data = json.loads(Path(args.worker_request_json).read_text(encoding="utf-8"))
     payload = run_worker_from_request(data)
     print(json.dumps(payload, default=str))
-
-
-def _write_job_artifacts(job_dir: Path, payload: dict) -> None:
-    job_dir.mkdir(parents=True, exist_ok=True)
-    job_dir.joinpath("report.json").write_text(
-        json.dumps(payload, indent=2, default=str),
-        encoding="utf-8",
-    )
-    script = (payload.get("build") or {}).get("script")
-    if script:
-        job_dir.joinpath("reconstruction.py").write_text(str(script), encoding="utf-8")
 
 
 if __name__ == "__main__":
