@@ -16,11 +16,20 @@ class SampledCloud:
 
 
 def sample_surface(mesh_data: MeshData, count: int = 20_000) -> SampledCloud:
-    """Sample points uniformly from the mesh surface for downstream fitting."""
+    """Sample points uniformly from the mesh surface for downstream fitting.
+
+    The trimesh sampler relies on NumPy's global RNG. We temporarily seed it
+    for reproducible primitive/feature inference on the same input mesh.
+    """
     if count <= 0:
         raise ValueError("count must be positive")
 
-    points, face_indices = mesh_data.mesh.sample(count, return_index=True)
+    random_state = np.random.get_state()
+    np.random.seed(0)
+    try:
+        points, face_indices = mesh_data.mesh.sample(count, return_index=True)
+    finally:
+        np.random.set_state(random_state)
     normals = None
 
     if mesh_data.mesh.face_normals is not None and len(mesh_data.mesh.face_normals) > 0:

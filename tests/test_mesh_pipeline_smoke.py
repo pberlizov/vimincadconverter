@@ -24,6 +24,7 @@ from mesh2cad.domain.features import (
     RevolveSolidFeature,
     SphericalBossFeature,
     SphericalCavityFeature,
+    TaperedBossFeature,
     ThroughHoleFeature,
 )
 from mesh2cad.domain.primitives import ConePrimitive, CylinderPrimitive, PlanePrimitive, PrimitiveRegion, SpherePrimitive
@@ -826,6 +827,287 @@ def test_infer_features_detects_countersink_hole_from_cone_and_hole():
     assert hole_stacks[0].sections[1].start_radius == pytest.approx(1.0, abs=0.01)
 
 
+def test_infer_features_detects_counterbore_hole_stack():
+    top_points = np.array(
+        [[x, y, 4.0] for x in (-5.0, 5.0) for y in (-3.0, 3.0)],
+        dtype=np.float64,
+    )
+    bottom_points = np.array(
+        [[x, y, 0.0] for x in (-5.0, 5.0) for y in (-3.0, 3.0)],
+        dtype=np.float64,
+    )
+    outer_cyl_points = []
+    inner_cyl_points = []
+    outer_normals = []
+    inner_normals = []
+    for theta in np.linspace(0.0, 2.0 * np.pi, 32, endpoint=False):
+        cos_theta = np.cos(theta)
+        sin_theta = np.sin(theta)
+        for z_coord in np.linspace(2.8, 4.0, 8):
+            outer_cyl_points.append([1.0 + (1.8 * cos_theta), -0.5 + (1.8 * sin_theta), z_coord])
+            outer_normals.append([cos_theta, sin_theta, 0.0])
+        for z_coord in np.linspace(0.0, 4.0, 16):
+            inner_cyl_points.append([1.0 + (0.9 * cos_theta), -0.5 + (0.9 * sin_theta), z_coord])
+            inner_normals.append([cos_theta, sin_theta, 0.0])
+
+    points = np.vstack(
+        (
+            top_points,
+            bottom_points,
+            np.asarray(outer_cyl_points, dtype=np.float64),
+            np.asarray(inner_cyl_points, dtype=np.float64),
+        )
+    )
+    normals = np.vstack(
+        (
+            np.tile(np.array([[0.0, 0.0, 1.0]]), (len(top_points), 1)),
+            np.tile(np.array([[0.0, 0.0, -1.0]]), (len(bottom_points), 1)),
+            np.asarray(outer_normals, dtype=np.float64),
+            np.asarray(inner_normals, dtype=np.float64),
+        )
+    )
+    cloud = SampledCloud(points=points, normals=normals, source_face_indices=None)
+    scene = analyze_scene(cloud)
+
+    top_indices = list(range(0, len(top_points)))
+    bottom_indices = list(range(len(top_points), len(top_points) + len(bottom_points)))
+    outer_start = len(top_points) + len(bottom_points)
+    outer_indices = list(range(outer_start, outer_start + len(outer_cyl_points)))
+    inner_indices = list(range(outer_start + len(outer_cyl_points), len(points)))
+
+    top_plane = PlanePrimitive(
+        kind=PrimitiveKind.PLANE,
+        confidence=Confidence(score=0.95, reasons=[]),
+        region=PrimitiveRegion(point_indices=top_indices, area=60.0),
+        origin=np.array([0.0, 0.0, 4.0], dtype=np.float64),
+        normal=np.array([0.0, 0.0, 1.0], dtype=np.float64),
+    )
+    bottom_plane = PlanePrimitive(
+        kind=PrimitiveKind.PLANE,
+        confidence=Confidence(score=0.95, reasons=[]),
+        region=PrimitiveRegion(point_indices=bottom_indices, area=60.0),
+        origin=np.array([0.0, 0.0, 0.0], dtype=np.float64),
+        normal=np.array([0.0, 0.0, -1.0], dtype=np.float64),
+    )
+    outer_cylinder = CylinderPrimitive(
+        kind=PrimitiveKind.CYLINDER,
+        confidence=Confidence(score=0.87, reasons=[]),
+        region=PrimitiveRegion(point_indices=outer_indices, area=float(2.0 * np.pi * 1.8 * 1.2)),
+        axis_origin=np.array([1.0, -0.5, 4.0], dtype=np.float64),
+        axis_direction=np.array([0.0, 0.0, 1.0], dtype=np.float64),
+        radius=1.8,
+        height_estimate=1.2,
+    )
+    inner_cylinder = CylinderPrimitive(
+        kind=PrimitiveKind.CYLINDER,
+        confidence=Confidence(score=0.9, reasons=[]),
+        region=PrimitiveRegion(point_indices=inner_indices, area=float(2.0 * np.pi * 0.9 * 4.0)),
+        axis_origin=np.array([1.0, -0.5, 2.0], dtype=np.float64),
+        axis_direction=np.array([0.0, 0.0, 1.0], dtype=np.float64),
+        radius=0.9,
+        height_estimate=4.0,
+    )
+
+    result = infer_features(
+        primitives=[top_plane, bottom_plane, outer_cylinder, inner_cylinder],
+        scene=scene,
+        cloud=cloud,
+        tolerances=ToleranceConfig(linear=0.1, angular_deg=2.0, min_region_area=1.0),
+    )
+
+    through_holes = [feature for feature in result.features if isinstance(feature, ThroughHoleFeature)]
+    assert len(through_holes) >= 1
+    hole_stacks = [feature for feature in result.features if isinstance(feature, HoleStackFeature)]
+    assert len(hole_stacks) >= 1
+    counterbore = next(
+        stack
+        for stack in hole_stacks
+        if stack.termination == HoleTermination.THROUGH
+        and len(stack.sections) == 2
+        and all(section.kind == HoleSectionKind.CYLINDER for section in stack.sections)
+        and stack.sections[0].start_radius > stack.sections[1].start_radius
+    )
+    assert counterbore.center_xy == pytest.approx(through_holes[0].center_xy, abs=0.15)
+    assert isinstance(counterbore.start_from_top, bool)
+    assert counterbore.sections[0].start_radius == pytest.approx(1.8, abs=0.05)
+    assert counterbore.sections[1].start_radius == pytest.approx(0.9, abs=0.05)
+    assert counterbore.sections[0].end_offset == pytest.approx(1.37, abs=0.2)
+
+
+def test_infer_features_detects_tapered_blind_hole_stack():
+    top_points = np.array(
+        [[x, y, 4.0] for x in (-5.0, 5.0) for y in (-3.0, 3.0)],
+        dtype=np.float64,
+    )
+    bottom_points = np.array(
+        [[x, y, 0.0] for x in (-5.0, 5.0) for y in (-3.0, 3.0)],
+        dtype=np.float64,
+    )
+    blind_cyl_points = []
+    blind_normals = []
+    for theta in np.linspace(0.0, 2.0 * np.pi, 32, endpoint=False):
+        cos_theta = np.cos(theta)
+        sin_theta = np.sin(theta)
+        for z_coord in np.linspace(2.0, 4.0, 12):
+            blind_cyl_points.append([-1.0 + (0.9 * cos_theta), 0.5 + (0.9 * sin_theta), z_coord])
+            blind_normals.append([cos_theta, sin_theta, 0.0])
+
+    cone_points = []
+    for z_coord, radius in ((3.4, 1.6), (4.0, 1.8)):
+        for theta in np.linspace(0.0, 2.0 * np.pi, 32, endpoint=False):
+            cone_points.append([-1.0 + (radius * np.cos(theta)), 0.5 + (radius * np.sin(theta)), z_coord])
+
+    points = np.vstack(
+        (
+            top_points,
+            bottom_points,
+            np.asarray(blind_cyl_points, dtype=np.float64),
+            np.asarray(cone_points, dtype=np.float64),
+        )
+    )
+    normals = np.vstack(
+        (
+            np.tile(np.array([[0.0, 0.0, 1.0]]), (len(top_points), 1)),
+            np.tile(np.array([[0.0, 0.0, -1.0]]), (len(bottom_points), 1)),
+            np.asarray(blind_normals, dtype=np.float64),
+            np.tile(np.array([[1.0, 0.0, 0.0]]), (len(cone_points), 1)),
+        )
+    )
+    cloud = SampledCloud(points=points, normals=normals, source_face_indices=None)
+    scene = analyze_scene(cloud)
+
+    top_indices = list(range(0, len(top_points)))
+    bottom_indices = list(range(len(top_points), len(top_points) + len(bottom_points)))
+    blind_start = len(top_points) + len(bottom_points)
+    blind_indices = list(range(blind_start, blind_start + len(blind_cyl_points)))
+    cone_indices = list(range(blind_start + len(blind_cyl_points), len(points)))
+
+    top_plane = PlanePrimitive(
+        kind=PrimitiveKind.PLANE,
+        confidence=Confidence(score=0.95, reasons=[]),
+        region=PrimitiveRegion(point_indices=top_indices, area=60.0),
+        origin=np.array([0.0, 0.0, 4.0], dtype=np.float64),
+        normal=np.array([0.0, 0.0, 1.0], dtype=np.float64),
+    )
+    bottom_plane = PlanePrimitive(
+        kind=PrimitiveKind.PLANE,
+        confidence=Confidence(score=0.95, reasons=[]),
+        region=PrimitiveRegion(point_indices=bottom_indices, area=60.0),
+        origin=np.array([0.0, 0.0, 0.0], dtype=np.float64),
+        normal=np.array([0.0, 0.0, -1.0], dtype=np.float64),
+    )
+    blind_cylinder = CylinderPrimitive(
+        kind=PrimitiveKind.CYLINDER,
+        confidence=Confidence(score=0.9, reasons=[]),
+        region=PrimitiveRegion(point_indices=blind_indices, area=float(2.0 * np.pi * 0.9 * 2.0)),
+        axis_origin=np.array([-1.0, 0.5, 3.0], dtype=np.float64),
+        axis_direction=np.array([0.0, 0.0, 1.0], dtype=np.float64),
+        radius=0.9,
+        height_estimate=2.0,
+    )
+    cone = ConePrimitive(
+        kind=PrimitiveKind.CONE,
+        confidence=Confidence(score=0.86, reasons=[]),
+        region=PrimitiveRegion(point_indices=cone_indices, area=float(np.pi * (1.8 + 1.6) * 0.6)),
+        apex=np.array([-1.0, 0.5, 0.0], dtype=np.float64),
+        axis_direction=np.array([0.0, 0.0, 1.0], dtype=np.float64),
+        base_radius=1.8,
+        top_radius=1.6,
+        semi_angle_deg=56.3099,
+        height_estimate=0.6,
+    )
+
+    result = infer_features(
+        primitives=[top_plane, bottom_plane, blind_cylinder, cone],
+        scene=scene,
+        cloud=cloud,
+        tolerances=ToleranceConfig(linear=0.1, angular_deg=2.0, min_region_area=1.0),
+    )
+
+    hole_stacks = [feature for feature in result.features if isinstance(feature, HoleStackFeature)]
+    tapered_blind = next(
+        stack
+        for stack in hole_stacks
+        if stack.termination == HoleTermination.BLIND
+        and len(stack.sections) == 2
+        and stack.sections[0].kind == HoleSectionKind.CONE
+        and stack.sections[1].kind == HoleSectionKind.CYLINDER
+    )
+    assert tapered_blind.sections[0].start_radius == pytest.approx(1.8, abs=0.15)
+    assert tapered_blind.sections[1].start_radius == pytest.approx(0.9, abs=0.05)
+    assert tapered_blind.total_depth == pytest.approx(2.26, abs=0.2)
+
+
+def test_infer_features_detects_tapered_boss():
+    top_points = np.array(
+        [[x, y, 4.0] for x in (-5.0, 5.0) for y in (-3.0, 3.0)],
+        dtype=np.float64,
+    )
+    bottom_points = np.array(
+        [[x, y, 0.0] for x in (-5.0, 5.0) for y in (-3.0, 3.0)],
+        dtype=np.float64,
+    )
+    cone_points = []
+    for z_coord, radius in ((4.0, 1.8), (4.7, 1.2)):
+        for theta in np.linspace(0.0, 2.0 * np.pi, 32, endpoint=False):
+            cone_points.append([0.75 + (radius * np.cos(theta)), -0.25 + (radius * np.sin(theta)), z_coord])
+
+    points = np.vstack((top_points, bottom_points, np.asarray(cone_points, dtype=np.float64)))
+    normals = np.vstack(
+        (
+            np.tile(np.array([[0.0, 0.0, 1.0]]), (len(top_points), 1)),
+            np.tile(np.array([[0.0, 0.0, -1.0]]), (len(bottom_points), 1)),
+            np.tile(np.array([[1.0, 0.0, 0.0]]), (len(cone_points), 1)),
+        )
+    )
+    cloud = SampledCloud(points=points, normals=normals, source_face_indices=None)
+    scene = analyze_scene(cloud)
+
+    top_indices = list(range(0, len(top_points)))
+    bottom_indices = list(range(len(top_points), len(top_points) + len(bottom_points)))
+    cone_indices = list(range(len(top_points) + len(bottom_points), len(points)))
+
+    top_plane = PlanePrimitive(
+        kind=PrimitiveKind.PLANE,
+        confidence=Confidence(score=0.95, reasons=[]),
+        region=PrimitiveRegion(point_indices=top_indices, area=60.0),
+        origin=np.array([0.0, 0.0, 4.0], dtype=np.float64),
+        normal=np.array([0.0, 0.0, 1.0], dtype=np.float64),
+    )
+    bottom_plane = PlanePrimitive(
+        kind=PrimitiveKind.PLANE,
+        confidence=Confidence(score=0.95, reasons=[]),
+        region=PrimitiveRegion(point_indices=bottom_indices, area=60.0),
+        origin=np.array([0.0, 0.0, 0.0], dtype=np.float64),
+        normal=np.array([0.0, 0.0, -1.0], dtype=np.float64),
+    )
+    cone = ConePrimitive(
+        kind=PrimitiveKind.CONE,
+        confidence=Confidence(score=0.86, reasons=[]),
+        region=PrimitiveRegion(point_indices=cone_indices, area=float(np.pi * (1.8 + 1.2) * 0.7)),
+        apex=np.array([0.75, -0.25, 6.0], dtype=np.float64),
+        axis_direction=np.array([0.0, 0.0, 1.0], dtype=np.float64),
+        base_radius=1.8,
+        top_radius=1.2,
+        semi_angle_deg=40.0,
+        height_estimate=0.7,
+    )
+
+    result = infer_features(
+        primitives=[top_plane, bottom_plane, cone],
+        scene=scene,
+        cloud=cloud,
+        tolerances=ToleranceConfig(linear=0.1, angular_deg=2.0, min_region_area=1.0),
+    )
+
+    tapered_bosses = [feature for feature in result.features if isinstance(feature, TaperedBossFeature)]
+    assert len(tapered_bosses) == 1
+    assert tapered_bosses[0].base_radius == pytest.approx(1.8, abs=0.05)
+    assert tapered_bosses[0].top_radius == pytest.approx(1.2, abs=0.05)
+    assert tapered_bosses[0].height == pytest.approx(0.7, abs=0.1)
+    assert isinstance(tapered_bosses[0].start_from_top, bool)
+
+
 def test_infer_features_detects_spherical_boss():
     top_points = np.array(
         [[x, y, 2.0] for x in (-5.0, 5.0) for y in (-3.0, 3.0)],
@@ -1361,6 +1643,94 @@ def test_generate_build123d_script_supports_counterbore_hole_stack():
     assert "COUNTERBORE_HOLES = [" in script
     assert "(0.500000, -0.500000, 0.900000, 1.800000, 1.500000, True, 5.000000)" in script
     assert "CounterBoreHole(radius=hole_radius, counter_bore_radius=bore_radius, counter_bore_depth=bore_depth, depth=total_depth, mode=Mode.SUBTRACT)" in script
+
+
+def test_generate_build123d_script_supports_tapered_blind_hole_stack():
+    base_feature = BaseExtrudeFeature(
+        kind=FeatureKind.BASE_EXTRUDE,
+        confidence=Confidence(score=0.95, reasons=[]),
+        parameters={"depth": 4.0},
+        references={},
+        profile_loops=[[(-5.0, -3.0), (5.0, -3.0), (5.0, 3.0), (-5.0, 3.0)]],
+        depth=4.0,
+        sketch_plane={
+            "origin": (0.0, 0.0, 0.0),
+            "x_dir": (1.0, 0.0, 0.0),
+            "y_dir": (0.0, 1.0, 0.0),
+            "z_dir": (0.0, 0.0, 1.0),
+        },
+    )
+    hole_stack = HoleStackFeature(
+        kind=FeatureKind.HOLE_STACK,
+        confidence=Confidence(score=0.9, reasons=[]),
+        parameters={},
+        references={},
+        center_xy=(-1.0, 0.5),
+        axis_origin=(0.0, 0.0, 4.0),
+        axis_direction=(0.0, 0.0, 1.0),
+        start_from_top=True,
+        total_depth=2.25,
+        termination=HoleTermination.BLIND,
+        sections=[
+            HoleSection(
+                kind=HoleSectionKind.CONE,
+                start_offset=0.0,
+                end_offset=0.9,
+                start_radius=1.8,
+                end_radius=0.9,
+            ),
+            HoleSection(
+                kind=HoleSectionKind.CYLINDER,
+                start_offset=0.9,
+                end_offset=2.25,
+                start_radius=0.9,
+                end_radius=0.9,
+            ),
+        ],
+    )
+
+    script = generate_script([base_feature, hole_stack])
+
+    assert "BLIND_COUNTERSINK_HOLES = [" in script
+    assert "(-1.000000, 0.500000, 0.900000, 1.800000, 90.000000, 2.250000, True)" in script
+    assert "CounterSinkHole(radius=hole_radius, counter_sink_radius=sink_radius, depth=blind_depth, counter_sink_angle=sink_angle, mode=Mode.SUBTRACT)" in script
+
+
+def test_generate_build123d_script_supports_tapered_bosses():
+    base_feature = BaseExtrudeFeature(
+        kind=FeatureKind.BASE_EXTRUDE,
+        confidence=Confidence(score=0.95, reasons=[]),
+        parameters={"depth": 4.0},
+        references={},
+        profile_loops=[[(-5.0, -3.0), (5.0, -3.0), (5.0, 3.0), (-5.0, 3.0)]],
+        depth=4.0,
+        sketch_plane={
+            "origin": (0.0, 0.0, 0.0),
+            "x_dir": (1.0, 0.0, 0.0),
+            "y_dir": (0.0, 1.0, 0.0),
+            "z_dir": (0.0, 0.0, 1.0),
+        },
+    )
+    tapered_boss = TaperedBossFeature(
+        kind=FeatureKind.TAPERED_BOSS,
+        confidence=Confidence(score=0.9, reasons=[]),
+        parameters={},
+        references={},
+        center_xy=(0.75, -0.25),
+        base_radius=1.8,
+        top_radius=1.2,
+        height=0.7,
+        start_offset=4.0,
+        start_from_top=True,
+    )
+
+    script = generate_script([base_feature, tapered_boss])
+
+    assert "TAPERED_BOSSES = [" in script
+    assert "(0.750000, -0.250000, 1.800000, 1.200000, 0.700000, 4.000000, True)" in script
+    assert "with BuildSketch(base_plane):" in script
+    assert "with BuildSketch(top_plane):" in script
+    assert "loft(mode=Mode.ADD)" in script
 
 
 def test_generate_build123d_script_supports_angled_countersink():

@@ -30,6 +30,7 @@ class FeatureKind(str, Enum):
     SPHERICAL_BOSS = "spherical_boss"
     SPHERICAL_CAVITY = "spherical_cavity"
     BOSS = "boss"
+    TAPERED_BOSS = "tapered_boss"
     POCKET = "pocket"
     REVOLVE = "revolve"
     FILLET_CANDIDATE = "fillet_candidate"

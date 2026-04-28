@@ -14,6 +14,7 @@ from mesh2cad.domain.features import (
     RevolveSolidFeature,
     SphericalBossFeature,
     SphericalCavityFeature,
+    TaperedBossFeature,
     ThroughHoleFeature,
 )
 from mesh2cad.domain.types import FeatureKind, HoleSectionKind, HoleTermination
@@ -61,6 +62,8 @@ def generate_script(features: list[Feature]) -> str:
     blind_holes = [feature for feature in features if isinstance(feature, BlindHoleFeature)]
     pockets = [feature for feature in features if isinstance(feature, PocketFeature)]
     bosses = [feature for feature in features if isinstance(feature, BossFeature)]
+    tapered_bosses = [feature for feature in features if isinstance(feature, TaperedBossFeature)]
+    blind_countersink_holes: list[CounterSinkHoleFeature] = []
     counterbore_holes: list[
         tuple[
             tuple[float, float],
@@ -75,11 +78,13 @@ def generate_script(features: list[Feature]) -> str:
     ] = []
 
     if hole_stacks:
-        through_holes, blind_holes, countersink_holes, counterbore_holes = _decompose_hole_stacks(hole_stacks)
-
+        through_holes, blind_holes, countersink_holes, blind_countersink_holes, counterbore_holes = _decompose_hole_stacks(hole_stacks)
+    else:
+        blind_countersink_holes = []
+ 
     profile_loop = _normalize_profile_loop(base_feature.profile_loops[0])
     lines: list[str] = [
-        "from build123d import BuildPart, BuildSketch, Plane, Polygon, Circle, Locations, Mode, CounterBoreHole, CounterSinkHole, Sphere, extrude",
+        "from build123d import BuildPart, BuildSketch, Plane, Polygon, Circle, Locations, Mode, CounterBoreHole, CounterSinkHole, Sphere, extrude, loft",
         "",
         f"DEPTH = {base_feature.depth:.6f}",
         "PROFILE = [",
@@ -186,6 +191,39 @@ def generate_script(features: list[Feature]) -> str:
     else:
         lines.append("COUNTERSINK_HOLES = []")
 
+    aligned_blind_countersinks: list[CounterSinkHoleFeature] = []
+    angled_blind_countersinks: list[CounterSinkHoleFeature] = []
+    for sink in blind_countersink_holes:
+        if _is_hole_axis_aligned(sink.axis_direction, hole_plane_z_dir):
+            aligned_blind_countersinks.append(sink)
+        else:
+            angled_blind_countersinks.append(sink)
+
+    if angled_blind_countersinks:
+        lines.append("ANGLED_BLIND_COUNTERSINKS = [")
+        for sink in angled_blind_countersinks:
+            sink_origin = format_tuple3(sink.axis_origin)
+            sink_direction = format_tuple3(sink.axis_direction)
+            sink_x_dir = format_tuple3(revolve_sketch_frame(sink.axis_origin, sink.axis_direction)[2])
+            blind_depth = float(sink.parameters.get("blind_depth", 0.0))
+            lines.append(
+                f"    ({sink_origin}, {sink_x_dir}, {sink_direction}, {sink.center_xy[0]:.6f}, {sink.center_xy[1]:.6f}, {sink.hole_radius:.6f}, {sink.counter_sink_radius:.6f}, {sink.counter_sink_angle_deg:.6f}, {blind_depth:.6f}, {str(bool(sink.start_from_top))}),"
+            )
+        lines.append("]")
+    else:
+        lines.append("ANGLED_BLIND_COUNTERSINKS = []")
+
+    if aligned_blind_countersinks:
+        lines.append("BLIND_COUNTERSINK_HOLES = [")
+        for hole in aligned_blind_countersinks:
+            blind_depth = float(hole.parameters.get("blind_depth", 0.0))
+            lines.append(
+                f"    ({hole.center_xy[0]:.6f}, {hole.center_xy[1]:.6f}, {hole.hole_radius:.6f}, {hole.counter_sink_radius:.6f}, {hole.counter_sink_angle_deg:.6f}, {blind_depth:.6f}, {str(bool(hole.start_from_top))}),"
+            )
+        lines.append("]")
+    else:
+        lines.append("BLIND_COUNTERSINK_HOLES = []")
+
     aligned_counterbores: list[
         tuple[
             tuple[float, float],
@@ -282,8 +320,20 @@ def generate_script(features: list[Feature]) -> str:
     else:
         lines.append("BOSSES = []")
 
+    if tapered_bosses:
+        lines.append("TAPERED_BOSSES = [")
+        for boss in tapered_bosses:
+            lines.append(
+                f"    ({boss.center_xy[0]:.6f}, {boss.center_xy[1]:.6f}, {boss.base_radius:.6f}, {boss.top_radius:.6f}, {boss.height:.6f}, {boss.start_offset:.6f}, {str(bool(boss.start_from_top))}),"
+            )
+        lines.append("]")
+    else:
+        lines.append("TAPERED_BOSSES = []")
+
     sketch_block = _extrude_sketch_block(base_feature)
     lines.extend(sketch_block)
+    if lines and lines[-1] == "result = part.part":
+        lines.pop()
 
     if angled_holes:
         lines.extend(
@@ -291,7 +341,7 @@ def generate_script(features: list[Feature]) -> str:
                 "    for hole_origin, hole_x_dir, hole_axis, radius, depth in ANGLED_HOLES:",
                 "        HOLE_PLANE = Plane(origin=hole_origin, x_dir=hole_x_dir, z_dir=hole_axis)",
                 "        with BuildSketch(HOLE_PLANE):",
-                "            Circle(radius, mode=Mode.SUBTRACT)",
+                "            Circle(radius)",
                 "        extrude(amount=depth, mode=Mode.SUBTRACT)",
             ]
         )
@@ -304,6 +354,17 @@ def generate_script(features: list[Feature]) -> str:
                 "        with Locations(SINK_PLANE):",
                 "            with Locations((x_pos, y_pos)):",
                 "                CounterSinkHole(radius=hole_radius, counter_sink_radius=sink_radius, depth=None, counter_sink_angle=sink_angle, mode=Mode.SUBTRACT)",
+            ]
+        )
+
+    if angled_blind_countersinks:
+        lines.extend(
+            [
+                "    for sink_origin, sink_x_dir, sink_axis, x_pos, y_pos, hole_radius, sink_radius, sink_angle, blind_depth, start_from_top in ANGLED_BLIND_COUNTERSINKS:",
+                "        SINK_PLANE = Plane(origin=sink_origin, x_dir=sink_x_dir, z_dir=sink_axis)",
+                "        with Locations(SINK_PLANE):",
+                "            with Locations((x_pos, y_pos)):",
+                "                CounterSinkHole(radius=hole_radius, counter_sink_radius=sink_radius, depth=blind_depth, counter_sink_angle=sink_angle, mode=Mode.SUBTRACT)",
             ]
         )
 
@@ -329,6 +390,8 @@ def generate_script(features: list[Feature]) -> str:
                 "                CounterBoreHole(radius=hole_radius, counter_bore_radius=bore_radius, counter_bore_depth=bore_depth, depth=total_depth, mode=Mode.SUBTRACT)",
             ]
         )
+
+    lines.extend(["", "result = part.part"])
 
     return "\n".join(lines)
 
@@ -364,6 +427,36 @@ def _extrude_sketch_block(base_feature: BaseExtrudeFeature) -> list[str]:
             "            with Locations((x_pos, y_pos)):",
             "                Circle(radius)",
             "        extrude(amount=height)",
+            "    for x_pos, y_pos, base_radius, top_radius, height, start_offset, start_from_top in TAPERED_BOSSES:",
+            "        if start_from_top:",
+            "            boss_origin = (",
+            "                ORIGIN[0] + (Z_DIR[0] * start_offset),",
+            "                ORIGIN[1] + (Z_DIR[1] * start_offset),",
+            "                ORIGIN[2] + (Z_DIR[2] * start_offset),",
+            "            )",
+            "            boss_top_origin = (",
+            "                boss_origin[0] + (Z_DIR[0] * height),",
+            "                boss_origin[1] + (Z_DIR[1] * height),",
+            "                boss_origin[2] + (Z_DIR[2] * height),",
+            "            )",
+            "            base_plane = Plane(origin=boss_origin, x_dir=X_DIR, z_dir=Z_DIR)",
+            "            top_plane = Plane(origin=boss_top_origin, x_dir=X_DIR, z_dir=Z_DIR)",
+            "        else:",
+            "            boss_origin = ORIGIN",
+            "            boss_top_origin = (",
+            "                ORIGIN[0] - (Z_DIR[0] * height),",
+            "                ORIGIN[1] - (Z_DIR[1] * height),",
+            "                ORIGIN[2] - (Z_DIR[2] * height),",
+            "            )",
+            "            base_plane = Plane(origin=boss_origin, x_dir=X_DIR, z_dir=NEG_Z_DIR)",
+            "            top_plane = Plane(origin=boss_top_origin, x_dir=X_DIR, z_dir=NEG_Z_DIR)",
+            "        with BuildSketch(base_plane):",
+            "            with Locations((x_pos, y_pos)):",
+            "                Circle(base_radius)",
+            "        with BuildSketch(top_plane):",
+            "            with Locations((x_pos, y_pos)):",
+            "                Circle(top_radius)",
+            "        loft(mode=Mode.ADD)",
             "    for x_pos, y_pos, z_pos, radius in SPHERICAL_BOSSES:",
             "        sphere_center = (",
             "            ORIGIN[0] + (X_DIR[0] * x_pos) + (Y_DIR[0] * y_pos) + (Z_DIR[0] * z_pos),",
@@ -404,6 +497,19 @@ def _extrude_sketch_block(base_feature: BaseExtrudeFeature) -> list[str]:
             "        with Locations(sink_plane):",
             "            with Locations((x_pos, y_pos)):",
             "                CounterSinkHole(radius=hole_radius, counter_sink_radius=sink_radius, depth=None, counter_sink_angle=sink_angle, mode=Mode.SUBTRACT)",
+            "    for x_pos, y_pos, hole_radius, sink_radius, sink_angle, blind_depth, start_from_top in BLIND_COUNTERSINK_HOLES:",
+            "        if start_from_top:",
+            "            sink_origin = (",
+            "                ORIGIN[0] + (Z_DIR[0] * DEPTH),",
+            "                ORIGIN[1] + (Z_DIR[1] * DEPTH),",
+            "                ORIGIN[2] + (Z_DIR[2] * DEPTH),",
+            "            )",
+            "            sink_plane = Plane(origin=sink_origin, x_dir=X_DIR, z_dir=NEG_Z_DIR)",
+            "        else:",
+            "            sink_plane = SKETCH_PLANE",
+            "        with Locations(sink_plane):",
+            "            with Locations((x_pos, y_pos)):",
+            "                CounterSinkHole(radius=hole_radius, counter_sink_radius=sink_radius, depth=blind_depth, counter_sink_angle=sink_angle, mode=Mode.SUBTRACT)",
             "    for x_pos, y_pos, hole_radius, bore_radius, bore_depth, start_from_top, total_depth in COUNTERBORE_HOLES:",
             "        if start_from_top:",
             "            bore_origin = (",
@@ -445,6 +551,14 @@ def _extrude_sketch_block(base_feature: BaseExtrudeFeature) -> list[str]:
         "            with Locations((x_pos, y_pos)):",
         "                Circle(radius)",
         "        extrude(amount=height)",
+        "    for x_pos, y_pos, base_radius, top_radius, height, start_offset, start_from_top in TAPERED_BOSSES:",
+        "        with BuildSketch():",
+        "            with Locations((x_pos, y_pos)):",
+        "                Circle(base_radius)",
+        "        with BuildSketch():",
+        "            with Locations((x_pos, y_pos)):",
+        "                Circle(top_radius)",
+        "        loft(mode=Mode.ADD)",
         "    for x_pos, y_pos, z_pos, radius in SPHERICAL_BOSSES:",
         "        with Locations((x_pos, y_pos, z_pos)):",
         "            Sphere(radius, mode=Mode.ADD)",
@@ -459,6 +573,9 @@ def _extrude_sketch_block(base_feature: BaseExtrudeFeature) -> list[str]:
         "    for x_pos, y_pos, hole_radius, sink_radius, sink_angle, start_from_top in COUNTERSINK_HOLES:",
         "        with Locations((x_pos, y_pos)):",
         "            CounterSinkHole(radius=hole_radius, counter_sink_radius=sink_radius, depth=None, counter_sink_angle=sink_angle, mode=Mode.SUBTRACT)",
+        "    for x_pos, y_pos, hole_radius, sink_radius, sink_angle, blind_depth, start_from_top in BLIND_COUNTERSINK_HOLES:",
+        "        with Locations((x_pos, y_pos)):",
+        "            CounterSinkHole(radius=hole_radius, counter_sink_radius=sink_radius, depth=blind_depth, counter_sink_angle=sink_angle, mode=Mode.SUBTRACT)",
         "    for x_pos, y_pos, hole_radius, bore_radius, bore_depth, start_from_top, total_depth in COUNTERBORE_HOLES:",
         "        with Locations((x_pos, y_pos)):",
         "            CounterBoreHole(radius=hole_radius, counter_bore_radius=bore_radius, counter_bore_depth=bore_depth, depth=total_depth, mode=Mode.SUBTRACT)",
@@ -520,6 +637,7 @@ def _decompose_hole_stacks(
     list[ThroughHoleFeature],
     list[BlindHoleFeature],
     list[CounterSinkHoleFeature],
+    list[CounterSinkHoleFeature],
     list[
         tuple[
             tuple[float, float],
@@ -536,6 +654,7 @@ def _decompose_hole_stacks(
     through_holes: list[ThroughHoleFeature] = []
     blind_holes: list[BlindHoleFeature] = []
     countersinks: list[CounterSinkHoleFeature] = []
+    blind_countersinks: list[CounterSinkHoleFeature] = []
     counterbores: list[
         tuple[
             tuple[float, float],
@@ -560,6 +679,25 @@ def _decompose_hole_stacks(
                     kind=FeatureKind.COUNTERSINK_HOLE,
                     confidence=stack.confidence,
                     parameters=dict(stack.parameters),
+                    references=dict(stack.references),
+                    center_xy=stack.center_xy,
+                    hole_radius=float(cylinder_section.start_radius),
+                    counter_sink_radius=float(cone_section.start_radius),
+                    counter_sink_angle_deg=_cone_angle_deg(cone_section),
+                    start_from_top=bool(stack.start_from_top),
+                    axis_origin=stack.axis_origin,
+                    axis_direction=stack.axis_direction,
+                )
+            )
+            continue
+
+        if _stack_is_blind_countersink(stack):
+            cone_section, cylinder_section = stack.sections
+            blind_countersinks.append(
+                CounterSinkHoleFeature(
+                    kind=FeatureKind.COUNTERSINK_HOLE,
+                    confidence=stack.confidence,
+                    parameters={**dict(stack.parameters), "blind_depth": float(stack.total_depth)},
                     references=dict(stack.references),
                     center_xy=stack.center_xy,
                     hole_radius=float(cylinder_section.start_radius),
@@ -621,7 +759,7 @@ def _decompose_hole_stacks(
                 )
             )
 
-    return through_holes, blind_holes, countersinks, counterbores
+    return through_holes, blind_holes, countersinks, blind_countersinks, counterbores
 
 
 def _stack_is_single_cylindrical(stack: HoleStackFeature, termination: HoleTermination) -> bool:
@@ -657,6 +795,19 @@ def _stack_is_counterbore(stack: HoleStackFeature) -> bool:
         and abs(second.start_radius - second.end_radius) <= 1e-6
         and first.start_radius > second.start_radius
         and first.end_offset <= second.start_offset + 1e-6
+    )
+
+
+def _stack_is_blind_countersink(stack: HoleStackFeature) -> bool:
+    if stack.termination != HoleTermination.BLIND or len(stack.sections) != 2:
+        return False
+    first, second = stack.sections
+    return (
+        first.kind == HoleSectionKind.CONE
+        and second.kind == HoleSectionKind.CYLINDER
+        and first.start_radius > first.end_radius
+        and abs(first.end_radius - second.start_radius) <= 1e-6
+        and abs(second.start_radius - second.end_radius) <= 1e-6
     )
 
 

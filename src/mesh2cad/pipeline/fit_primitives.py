@@ -95,26 +95,42 @@ def _fit_planes(cloud: SampledCloud, tolerances: ToleranceConfig) -> list[PlaneP
 
     orientation_buckets = _bucket_normals(normals)
     min_support = max(50, int(len(points) * 0.05))
+    # A real plane's candidate set should have a consistent mean normal.
+    # This threshold catches spurious planes whose candidates are a mix of
+    # unrelated surface patches (e.g. distorted junction triangles at a hole
+    # edge that happen to project onto the same distance from a diagonal axis).
+    cos_coherence = math.cos(math.radians(tolerances.angular_deg * 4.0))
     planes: list[PlanePrimitive] = []
 
-    for bucket_indices in orientation_buckets.values():
+    for bucket_key, bucket_indices in orientation_buckets.items():
         if len(bucket_indices) < min_support:
             continue
 
-        representative_normal = _mean_direction(normals[bucket_indices])
-        distances = points @ representative_normal
-        bucket_distances = distances[bucket_indices]
+        # Derive the canonical direction from the bucket key so that buckets
+        # containing both +X and -X face normals (which cancel when averaged)
+        # still project distances correctly (e.g. peaks at x=+6 and x=-6).
+        key_vec = np.asarray(bucket_key, dtype=np.float64)
+        key_norm = float(np.linalg.norm(key_vec))
+        if key_norm < 1e-12:
+            continue
+        canonical_normal = key_vec / key_norm
 
-        cos_angular = math.cos(math.radians(tolerances.angular_deg * 2.5))
-        normal_align_mask = np.abs(normals @ representative_normal) >= cos_angular
+        distances = points @ canonical_normal
+        bucket_distances = distances[np.asarray(bucket_indices, dtype=np.int64)]
+
         peak_centers = _distance_peaks(bucket_distances, tolerances.linear)
         for peak in peak_centers:
-            close_mask = (
-                (np.abs(distances - peak) <= max(tolerances.linear * 2.0, 1e-6))
-                & normal_align_mask
-            )
+            close_mask = np.abs(distances - peak) <= max(tolerances.linear * 2.0, 1e-6)
             candidate_indices = np.flatnonzero(close_mask)
             if len(candidate_indices) < min_support:
+                continue
+
+            # Reject planes whose candidate normals diverge from the canonical
+            # direction — this eliminates spurious planes built from junction
+            # triangles whose per-face normals are distorted by mesh noise but
+            # happen to share a projection distance.
+            representative_normal = _mean_direction(normals[candidate_indices])
+            if abs(float(np.dot(representative_normal, canonical_normal))) < cos_coherence:
                 continue
 
             plane_points = points[candidate_indices]
@@ -449,7 +465,19 @@ def _candidate_cylinder_centers(
 
     threshold = max(tolerances.linear * 4.0, 0.35)
     clusters = _cluster_points(np.asarray(intersections, dtype=np.float64), threshold)
-    return [cluster.mean(axis=0) for cluster in clusters if len(cluster) >= 3]
+    # Each sidewall cluster corresponds to one physical cylinder.  Noisy
+    # normals scatter intersection points and form several small spurious
+    # clusters around the true center.  Return only the largest cluster —
+    # it represents the dominant (and correct) center estimate.  This
+    # prevents one hole from generating multiple conflicting candidate
+    # centers that survive the downstream validation checks.
+    if not clusters:
+        return []
+    best = max(clusters, key=len)
+    min_votes = max(5, int(len(intersections) * 0.02))
+    if len(best) < min_votes:
+        return []
+    return [best.mean(axis=0)]
 
 
 def _cluster_sidewall_components(

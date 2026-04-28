@@ -103,6 +103,16 @@ class BossFeature(Feature):
 
 
 @dataclass(slots=True)
+class TaperedBossFeature(Feature):
+    center_xy: tuple[float, float] = (0.0, 0.0)
+    base_radius: float = 0.0
+    top_radius: float = 0.0
+    height: float = 0.0
+    start_offset: float = 0.0
+    start_from_top: bool = True
+
+
+@dataclass(slots=True)
 class RevolveSolidFeature(Feature):
     """Solid of revolution: profile (radial, axial) in a pose-aware sketch plane; axis through ``axis_origin``."""
 
